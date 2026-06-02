@@ -1,0 +1,26 @@
+global:
+  domain: argocd.lab.lan
+
+configs:
+  params:
+    server.insecure: true
+    application.namespaces: "argocd,apps-*"
+
+server:
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: false
+
+crds:
+  install: true
+  keep: true
+
+controller:
+  replicas: 1
+
+repoServer:
+  replicas: 1
+
+applicationSet:
+  replicas: 1
