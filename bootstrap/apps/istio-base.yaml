@@ -17,6 +17,13 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: istio-system
+  ignoreDifferences:
+    # Istio's CA controller populates caBundle at runtime; chart ships it empty.
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      name: istiod-default-validator
+      jqPathExpressions:
+        - '.webhooks[].clientConfig.caBundle'
   syncPolicy:
     automated:
       prune: true
