@@ -47,9 +47,48 @@ grafana:
     dashboards:
       enabled: true
       # ConfigMaps carrying this label get auto-loaded as dashboards.
-      # Istio's canned dashboards drop in by labeling them grafana_dashboard=1.
+      # The dashboards listed under `grafana.dashboards.*` below are rendered
+      # into ConfigMaps with this label automatically by the grafana subchart.
       label: grafana_dashboard
       searchNamespace: ALL
+
+  # Canonical Istio dashboards, fetched at helm-template time from the
+  # release-1.30 branch (matches our pinned Istio version — bump together).
+  # Source: github.com/istio/istio/tree/release-1.30/manifests/addons/dashboards
+  dashboards:
+    istio:
+      istio-mesh:
+        url: https://raw.githubusercontent.com/istio/istio/release-1.30/manifests/addons/dashboards/istio-mesh-dashboard.gen.json
+        datasource: Prometheus
+      istio-service:
+        url: https://raw.githubusercontent.com/istio/istio/release-1.30/manifests/addons/dashboards/istio-service-dashboard.json
+        datasource: Prometheus
+      istio-workload:
+        url: https://raw.githubusercontent.com/istio/istio/release-1.30/manifests/addons/dashboards/istio-workload-dashboard.json
+        datasource: Prometheus
+      istio-performance:
+        url: https://raw.githubusercontent.com/istio/istio/release-1.30/manifests/addons/dashboards/istio-performance-dashboard.json
+        datasource: Prometheus
+      istio-control-plane:
+        url: https://raw.githubusercontent.com/istio/istio/release-1.30/manifests/addons/dashboards/pilot-dashboard.gen.json
+        datasource: Prometheus
+      istio-extension:
+        url: https://raw.githubusercontent.com/istio/istio/release-1.30/manifests/addons/dashboards/istio-extension-dashboard.json
+        datasource: Prometheus
+
+  # Group the imported dashboards under an "Istio" folder in the UI.
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: istio
+          orgId: 1
+          folder: Istio
+          type: file
+          disableDeletion: true
+          editable: false
+          options:
+            path: /var/lib/grafana/dashboards/istio
 
 alertmanager:
   alertmanagerSpec:

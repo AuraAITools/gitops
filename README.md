@@ -2,6 +2,21 @@
 
 GitOps config repo for AuraAITools. ArgoCD reconciles every cluster from this repo. See [`GITOPS_STRATEGY.md`](./GITOPS_STRATEGY.md) for the architecture rationale.
 
+## Dashboards
+
+| Dashboard   | URL (once routing is up) | Port-forward fallback                                                                | What it shows                                                                  |
+| :---------- | :----------------------- | :----------------------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
+| **ArgoCD**  | http://argocd.lab.lan    | `kubectl -n argocd port-forward svc/argocd-server 8080:80` → http://localhost:8080   | Applications, sync status, sync history, drift, manual sync.                   |
+| **Grafana** | http://grafana.lab.lan ⏳ | `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80` → http://localhost:3000 | Cluster + node metrics out of the box. Istio's canonical dashboards (Mesh / Service / Workload / Performance / Control Plane / Extension) appear under the **Istio** folder — pulled from `istio/istio@release-1.30` at helm-template time. |
+| **Kiali**   | http://kiali.lab.lan ⏳   | `kubectl -n kiali port-forward svc/kiali 20001:20001` → http://localhost:20001       | Service mesh topology, traffic graph, per-service request rate / error rate.   |
+
+⏳ = `VirtualService` not yet committed; see [Backlog](#backlog).
+
+**Initial credentials** (rotate after first login):
+- ArgoCD: `admin` / `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`
+- Grafana: `admin` / `admin` (set in `core/monitoring/values.yaml`)
+- Kiali: anonymous (homelab only — change `auth.strategy` before any shared env)
+
 ## Layout
 
 ```
@@ -193,7 +208,7 @@ Three things make up the stack:
 | Piece                      | Source                                                                 |
 | :------------------------- | :--------------------------------------------------------------------- |
 | **Prometheus**             | from `kube-prometheus-stack` — scrapes envoy sidecars (`:15090 /stats/prometheus`) and istiod via `additionalPodMonitors` / `additionalServiceMonitors` in `core/monitoring/values.yaml`. |
-| **Grafana**                | also from `kube-prometheus-stack`; sidecar auto-loads any `ConfigMap` labeled `grafana_dashboard=1`. Drop Istio's canned dashboards in as ConfigMaps to get the **Mesh / Service / Workload / Performance** views. |
+| **Grafana**                | also from `kube-prometheus-stack`; sidecar auto-loads any `ConfigMap` labeled `grafana_dashboard=1`. Istio's canonical dashboards are wired in via `grafana.dashboards.istio.*` in `core/monitoring/values.yaml` — the grafana subchart fetches the JSON at helm-template time and generates labeled ConfigMaps automatically, grouped under an **Istio** folder. |
 | **Kiali**                  | service mesh topology + dep graph; reads metrics from the same Prometheus. Auth set to `anonymous` for homelab — change before any shared env. |
 
 What's disabled and why (in `core/monitoring/values.yaml`):
