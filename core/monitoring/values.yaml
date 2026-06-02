@@ -1,0 +1,71 @@
+prometheus:
+  prometheusSpec:
+    # Discover PodMonitor/ServiceMonitor across all namespaces, not just
+    # those carrying the chart's release labels.
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    retention: 24h
+    resources:
+      requests:
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+
+  # Scrape Istio sidecar (envoy) metrics — port 15090 /stats/prometheus
+  additionalPodMonitors:
+    - name: envoy-stats
+      namespaceSelector:
+        any: true
+      selector:
+        matchExpressions:
+          - { key: istio-prometheus-ignore, operator: DoesNotExist }
+      podMetricsEndpoints:
+        - path: /stats/prometheus
+          interval: 15s
+          relabelings:
+            - action: keep
+              sourceLabels: [__meta_kubernetes_pod_container_name]
+              regex: istio-proxy
+
+  # Scrape istiod control plane
+  additionalServiceMonitors:
+    - name: istiod
+      namespaceSelector:
+        matchNames: [istio-system]
+      selector:
+        matchLabels:
+          istio: pilot
+      endpoints:
+        - port: http-monitoring
+          interval: 15s
+
+grafana:
+  adminPassword: admin   # rotate after first login
+  defaultDashboardsTimezone: browser
+  sidecar:
+    dashboards:
+      enabled: true
+      # ConfigMaps carrying this label get auto-loaded as dashboards.
+      # Istio's canned dashboards drop in by labeling them grafana_dashboard=1.
+      label: grafana_dashboard
+      searchNamespace: ALL
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+
+# k3d/k3s ships an embedded etcd and replaces kube-proxy with klipper —
+# scraping the chart's defaults would just give DOWN targets and noisy alerts.
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false

@@ -1,0 +1,16 @@
+auth:
+  strategy: anonymous   # homelab; switch to "token" or OIDC for any shared env
+
+deployment:
+  namespace: kiali
+  cluster_wide_access: true   # required for full mesh view
+
+external_services:
+  prometheus:
+    url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+  grafana:
+    enabled: true
+    internal_url: http://kube-prometheus-stack-grafana.monitoring.svc.cluster.local
+    external_url: http://grafana.lab.lan
+  tracing:
+    enabled: false   # add Tempo/Jaeger later

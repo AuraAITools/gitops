@@ -6,23 +6,32 @@ GitOps config repo for AuraAITools. ArgoCD reconciles every cluster from this re
 
 ```
 bootstrap/
-├── root-app.yaml             # the only thing applied by hand — App-of-Apps root
-└── apps/                     # every other Application lives here
-    ├── argocd.yaml           # ArgoCD self-management
-    ├── istio-base.yaml       # CRDs                (sync-wave 0)
-    ├── istiod.yaml           # control plane      (sync-wave 1)
-    └── istio-gateway.yaml    # ingress gateway    (sync-wave 2)
-core/                         # values / overlays for platform components
-├── argocd/values.yaml
-└── istio/{istiod,gateway}-values.yaml
+├── root-app.yaml                    # the only thing applied by hand — App-of-Apps root
+└── apps/                            # every other Application lives here
+    ├── argocd.yaml                  # ArgoCD self-management        (sync-wave -10)
+    ├── istio-base.yaml              # CRDs                          (sync-wave 0)
+    ├── istiod.yaml                  # control plane                 (sync-wave 1)
+    ├── istio-gateway.yaml           # ingress gateway               (sync-wave 2)
+    ├── argocd-routing.yaml          # expose argocd UI              (sync-wave 3)
+    ├── kube-prometheus-stack.yaml   # Prom + Grafana + Alertmgr     (sync-wave 4)
+    └── kiali.yaml                   # mesh topology dashboard       (sync-wave 5)
+core/                                # values / overlays for platform components
+├── argocd/
+│   ├── values.yaml
+│   └── routing/                     # Gateway + VirtualService for argocd.lab.lan
+├── istio/{istiod,gateway}-values.yaml
+├── monitoring/values.yaml           # kube-prometheus-stack
+└── kiali/values.yaml
 ```
 
 ## Pinned versions
 
-| Component         | Version  | Notes                  |
-| :---------------- | :------- | :--------------------- |
-| ArgoCD Helm chart | `9.5.17` | ships ArgoCD `v3.4.3`  |
-| Istio             | `1.30.0` | sidecar mode           |
+| Component               | Version  | Notes                                   |
+| :---------------------- | :------- | :-------------------------------------- |
+| ArgoCD Helm chart       | `9.5.17` | ships ArgoCD `v3.4.3`                   |
+| Istio                   | `1.30.0` | sidecar mode                            |
+| kube-prometheus-stack   | `86.1.0` | Prometheus Operator `v0.91.0`           |
+| Kiali                   | `2.27.0` | Helm chart `kiali/kiali-server`         |
 
 Bump deliberately, never track `latest`.
 
@@ -41,17 +50,33 @@ This is how you express "X must exist and be ready before Y is created." It's th
 
 Waves in this repo:
 
-| Wave | App             | Why it has to go in this order                                                                  |
-| :--- | :-------------- | :---------------------------------------------------------------------------------------------- |
-| `-10`| `argocd`        | Self-management has to take over the in-place Helm release before any other App starts syncing. |
-| `0`  | `istio-base`    | Installs the Istio CRDs. Everything below references them — without these, manifests fail.      |
-| `1`  | `istiod`        | The control plane; admission webhook for sidecar injection. Gateways can't come up without it.  |
-| `2`  | `istio-gateway` | Gateway pods need sidecars injected by `istiod`, so this can't race ahead.                      |
+| Wave | App              | Why it has to go in this order                                                                  |
+| :--- | :--------------- | :---------------------------------------------------------------------------------------------- |
+| `-10`| `argocd`         | Self-management has to take over the in-place Helm release before any other App starts syncing. |
+| `0`  | `istio-base`     | Installs the Istio CRDs. Everything below references them — without these, manifests fail.      |
+| `1`  | `istiod`         | The control plane; admission webhook for sidecar injection. Gateways can't come up without it.  |
+| `2`  | `istio-gateway`  | Gateway pods need sidecars injected by `istiod`, so this can't race ahead.                      |
+| `3`  | `argocd-routing` | `Gateway` + `VirtualService` for `argocd.lab.lan` — needs istiod (CRD validation) + gateway up. |
+| `4`  | `kube-prometheus-stack` | Prometheus + Grafana + Alertmanager + node-exporter + kube-state-metrics. No hard dep on Istio at sync time, but scrapes envoy sidecars and istiod once they're up. |
+| `5`  | `kiali`          | Service mesh dashboard. Reads from the Prometheus that wave 4 just installed. |
 
 Two things to remember:
 
 - Waves order **the sync**, not the runtime. Once everything is Healthy, waves are irrelevant — the controller just watches drift on every resource equally.
 - Waves work on a single Application (resources inside one Application sync) **and** at the App-of-Apps level (Application objects themselves sync in wave order). We use both: the four Applications above are wave-ordered, and individual resources inside an Application can carry their own sync-wave annotation if needed.
+
+### Initial admin password lifecycle
+
+The installer auto-creates `Secret/argocd-initial-admin-secret` in the `argocd` namespace with a random password for the built-in `admin` user. It is **not** the authoritative store — the real admin password hash lives in `Secret/argocd-secret` under `admin.password` (bcrypt). On first startup, if `argocd-secret` has no `admin.password` set, `argocd-server` seeds it from `argocd-initial-admin-secret`. That's the only purpose of the initial secret — bootstrapping the seed.
+
+Lifecycle:
+
+1. Read the password: `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`.
+2. Log in to the UI (or `argocd login`).
+3. `argocd account update-password` — writes a new bcrypt hash into `argocd-secret`.
+4. **Only then** `kubectl -n argocd delete secret argocd-initial-admin-secret`. It's now redundant.
+
+Why not delete it immediately: if you drop it before step 3, and `argocd-server` later restarts, the controller's seeding check finds no admin password to seed from and no plaintext to recover — you lock yourself out. The initial secret is a one-time recovery lifeline; only drop it once you've rotated.
 
 ## One-time bootstrap
 
@@ -115,23 +140,89 @@ kubectl -n argocd annotate application root \
 # All Applications should be Synced + Healthy within a few minutes
 kubectl -n argocd get applications
 
-# Expect: root, argocd, istio-base, istiod, istio-gateway
+# Expect: root, argocd, istio-base, istiod, istio-gateway, argocd-routing,
+#         kube-prometheus-stack, kiali
 ```
 
 Smoke-test self-management: change `core/argocd/values.yaml`, commit, push. The `argocd` Application drifts to OutOfSync then self-heals within ~3 min (or instantly with a Git webhook).
 
 ## Access the UI
 
-Until Istio routing is wired up (`argocd.lab.lan` via a `Gateway` + `VirtualService`), use port-forward:
+### Steady-state — via Istio at `http://argocd.lab.lan`
+
+The `argocd-routing` Application installs a `Gateway` (in `istio-ingress` ns, listening on :80) and a `VirtualService` (in `argocd` ns, routing to `argocd-server:80`). One-time DNS:
+
+```bash
+# Find the address the gateway is reachable on
+kubectl -n istio-ingress get svc istio-ingressgateway
+
+# Then on whichever machine you'll browse from, add to /etc/hosts:
+#   <gateway-ip>   argocd.lab.lan
+# For k3d on the Mac mini itself: 127.0.0.1   argocd.lab.lan
+```
+
+Verify end-to-end:
+
+```bash
+curl -v http://argocd.lab.lan/    # expect 200 + ArgoCD HTML
+```
+
+If `curl` 503s or "no healthy upstream," the Gateway selector isn't matching the gateway pods — `kubectl -n istio-ingress get pods --show-labels` and confirm `istio=ingressgateway` is among the labels.
+
+### Fallback — port-forward (when routing isn't up yet, e.g. fresh bootstrap)
 
 ```bash
 kubectl -n argocd port-forward svc/argocd-server 8080:80
-# http://localhost:8080  — user: admin
+# http://localhost:8080
+```
+
+### First login
+
+User `admin`; initial password from the auto-generated Secret:
+
+```bash
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
-Rotate the initial admin password after first login.
+Rotate the admin password (`argocd account update-password`) or wire SSO, **then** delete `argocd-initial-admin-secret`. Deleting it before changing the password locks you out on the next `argocd-server` restart.
+
+## Observability
+
+Three things make up the stack:
+
+| Piece                      | Source                                                                 |
+| :------------------------- | :--------------------------------------------------------------------- |
+| **Prometheus**             | from `kube-prometheus-stack` — scrapes envoy sidecars (`:15090 /stats/prometheus`) and istiod via `additionalPodMonitors` / `additionalServiceMonitors` in `core/monitoring/values.yaml`. |
+| **Grafana**                | also from `kube-prometheus-stack`; sidecar auto-loads any `ConfigMap` labeled `grafana_dashboard=1`. Drop Istio's canned dashboards in as ConfigMaps to get the **Mesh / Service / Workload / Performance** views. |
+| **Kiali**                  | service mesh topology + dep graph; reads metrics from the same Prometheus. Auth set to `anonymous` for homelab — change before any shared env. |
+
+What's disabled and why (in `core/monitoring/values.yaml`):
+
+- `kubeEtcd`, `kubeProxy`, `kubeControllerManager`, `kubeScheduler` — k3d/k3s replaces or hides these. Leaving them on just produces DOWN targets and noisy alerts.
+- `tracing.enabled: false` in Kiali — no Tempo / Jaeger installed yet.
+
+### Access (until per-service routing is added)
+
+```bash
+# Grafana
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+# http://localhost:3000  — admin / admin (change immediately)
+
+# Kiali
+kubectl -n kiali port-forward svc/kiali 20001:20001
+# http://localhost:20001
+```
+
+Adding `grafana.lab.lan` and `kiali.lab.lan` `VirtualService`s is a follow-up — see Backlog.
 
 ## Re-bootstrap (cluster blown away)
 
 The bootstrap is idempotent. Re-run steps 3 → 6 above against a fresh cluster. The `argocd` Application is annotated `sync-wave: -10` so it reconciles before everything else.
+
+## Backlog
+
+- [ ] **Secrets management — SOPS + age.** Per the strategy doc, Sealed Secrets is an anti-pattern for this setup (single controller-key fragility, per-cluster ciphertext, manual DR). The chosen direction is SOPS + age with a KSOPS sidecar in `argocd-repo-server`. Removes the imperative PAT bootstrap and lets app secrets live encrypted in Git.
+- [ ] **cert-manager** for TLS at `*.lab.lan`. Options: self-signed CA via the cert-manager bootstrap Issuer (zero external deps, browser warnings) or Let's Encrypt via DNS-01 if the lab domain ever becomes routable. Currently all routing is plain HTTP, which is OK on the LAN only.
+- [ ] **Istio routing for Grafana + Kiali** — `grafana.lab.lan` / `kiali.lab.lan` VirtualServices. Will also be the point to refactor `argocd-gateway` → a shared `public-gateway` with `*.lab.lan`.
+- [ ] **Tracing** — Tempo (or Jaeger), wired into Kiali's `external_services.tracing`.
+- [ ] **Source Hydrator enablement** — once an `apps/<svc>/overlays/<env>/` tree exists. Strategy memo and project memory both have this as day-one for app workloads.
