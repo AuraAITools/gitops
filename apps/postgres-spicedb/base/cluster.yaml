@@ -1,0 +1,30 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres-spicedb
+spec:
+  instances: 1
+  primaryUpdateStrategy: unsupervised
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.0
+
+  bootstrap:
+    initdb:
+      database: spicedb
+      owner: spicedb
+
+  postgresql:
+    parameters:
+      shared_buffers: "128MB"
+      # SpiceDB's postgres datastore engine requires WAL commit timestamps
+      # to read changefeed for cache invalidation.
+      track_commit_timestamp: "on"
+
+  podMetadata:
+    annotations:
+      sidecar.istio.io/inject: "false"
+
+  monitoring:
+    enablePodMonitor: true
+
+  storage:
+    size: 1Gi   # overridden per env

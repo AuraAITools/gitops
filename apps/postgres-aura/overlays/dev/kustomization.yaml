@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+namespace: apps-dev
+patches:
+  - target:
+      kind: Cluster
+      name: postgres-aura
+    patch: |
+      - op: replace
+        path: /spec/storage/size
+        value: 2Gi

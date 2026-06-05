@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: apps
+  namespace: argocd
+spec:
+  description: Application workloads across dev/staging/prod
+  sourceRepos:
+    - https://github.com/AuraAITools/gitops.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: apps-dev
+    - server: https://kubernetes.default.svc
+      namespace: apps-staging
+    - server: https://kubernetes.default.svc
+      namespace: apps-prod
+  # Apps may not create cluster-scoped resources; tighten as needed per-app later.
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

@@ -1,0 +1,4 @@
+# CNPG operator — watches all namespaces by default.
+monitoring:
+  podMonitorEnabled: true   # kube-prometheus-stack picks it up via our cluster-wide selector
+replicaCount: 1

@@ -29,24 +29,42 @@ bootstrap/
     ├── istio-gateway.yaml           # ingress gateway               (sync-wave 2)
     ├── argocd-routing.yaml          # expose argocd UI              (sync-wave 3)
     ├── kube-prometheus-stack.yaml   # Prom + Grafana + Alertmgr     (sync-wave 4)
-    └── kiali.yaml                   # mesh topology dashboard       (sync-wave 5)
+    ├── kiali.yaml                   # mesh topology dashboard       (sync-wave 5)
+    ├── apps-project.yaml            # AppProject + apps-{dev,staging,prod} ns (wave 6)
+    ├── cloudnative-pg.yaml          # CNPG operator                 (sync-wave 6)
+    └── postgres-<db>-<env>.yaml     # 3 databases × 3 envs = 9 Apps (sync-wave 7)
+                                     # db ∈ {aura, keycloak, spicedb}
+                                     # env ∈ {dev, staging, prod}
 core/                                # values / overlays for platform components
 ├── argocd/
 │   ├── values.yaml
 │   └── routing/                     # Gateway + VirtualService for argocd.lab.lan
 ├── istio/{istiod,gateway}-values.yaml
 ├── monitoring/values.yaml           # kube-prometheus-stack
-└── kiali/values.yaml
+├── kiali/values.yaml
+├── apps-project/                    # AppProject `apps` + 3 env namespaces
+└── cloudnative-pg/values.yaml
+apps/                                # application workloads (DRY tree, hydrated by Source Hydrator)
+├── postgres-aura/                   # main application DB
+│   ├── base/                        # CNPG Cluster CR — name: postgres-aura, db: aura
+│   └── overlays/{dev,staging,prod}/ # per-env storage / replica patches
+├── postgres-keycloak/               # identity provider DB
+│   ├── base/                        # name: postgres-keycloak, db: keycloak
+│   └── overlays/{dev,staging,prod}/
+└── postgres-spicedb/                # authorization (Zanzibar) DB
+    ├── base/                        # name: postgres-spicedb, db: spicedb
+    └── overlays/{dev,staging,prod}/
 ```
 
 ## Pinned versions
 
-| Component               | Version  | Notes                                   |
-| :---------------------- | :------- | :-------------------------------------- |
-| ArgoCD Helm chart       | `9.5.17` | ships ArgoCD `v3.4.3`                   |
-| Istio                   | `1.30.0` | sidecar mode                            |
-| kube-prometheus-stack   | `86.1.0` | Prometheus Operator `v0.91.0`           |
-| Kiali                   | `2.27.0` | Helm chart `kiali/kiali-server`         |
+| Component               | Version  | Notes                                              |
+| :---------------------- | :------- | :------------------------------------------------- |
+| ArgoCD Helm chart       | `9.5.17` | ships ArgoCD `v3.4.3`; Source Hydrator (alpha) on  |
+| Istio                   | `1.30.0` | sidecar mode                                       |
+| kube-prometheus-stack   | `86.1.0` | Prometheus Operator `v0.91.0`                      |
+| Kiali                   | `2.27.0` | Helm chart `kiali/kiali-server`                    |
+| CloudNativePG operator  | `0.28.2` | operator `v1.29.1` — manages all 3 env Postgres    |
 
 Bump deliberately, never track `latest`.
 
@@ -74,11 +92,33 @@ Waves in this repo:
 | `3`  | `argocd-routing` | `Gateway` + `VirtualService` for `argocd.lab.lan` — needs istiod (CRD validation) + gateway up. |
 | `4`  | `kube-prometheus-stack` | Prometheus + Grafana + Alertmanager + node-exporter + kube-state-metrics. No hard dep on Istio at sync time, but scrapes envoy sidecars and istiod once they're up. |
 | `5`  | `kiali`          | Service mesh dashboard. Reads from the Prometheus that wave 4 just installed. |
+| `6`  | `apps-project`, `cloudnative-pg` | AppProject `apps` + 3 env namespaces (`apps-{dev,staging,prod}`) and the CNPG operator install in parallel. App workloads in wave 7 need both. |
+| `7`  | `postgres-{aura,keycloak,spicedb}-{dev,staging,prod}` | Nine `Cluster` CRs — 3 databases × 3 envs. Each materialized via Source Hydrator from `apps/postgres-<db>/overlays/<env>` → `environments/<env>` branches. |
 
 Two things to remember:
 
 - Waves order **the sync**, not the runtime. Once everything is Healthy, waves are irrelevant — the controller just watches drift on every resource equally.
 - Waves work on a single Application (resources inside one Application sync) **and** at the App-of-Apps level (Application objects themselves sync in wave order). We use both: the four Applications above are wave-ordered, and individual resources inside an Application can carry their own sync-wave annotation if needed.
+
+### Source Hydrator (alpha)
+
+ArgoCD 3.4's "rendered manifest pattern." The Application's `spec.source` is replaced by `spec.sourceHydrator`:
+
+- **`drySource`** — where humans author. Helm chart, Kustomize overlay, or raw YAML on `main`. Path: `apps/<svc>/overlays/<env>`.
+- **`syncSource`** — where ArgoCD actually syncs from. ArgoCD's **commit server** renders `drySource` and pushes the rendered YAML to this branch. We use one branch per env: `environments/dev`, `environments/staging`, `environments/prod`.
+- **`hydrateTo`** (optional, not used yet) — a review branch the hydrator writes *first*; a promotion process then fast-forwards `syncSource`. Equivalent to PR-style env promotion.
+
+What this buys us vs. plain `spec.source`:
+
+1. **Rendered diff in review** — pull requests against `environments/<env>` show the actual YAML delta a deploy will produce, not just "helm values changed." Promotion review surface is auditable.
+2. **DRY authoring on one branch** — overlays live on `main`. Branch-per-env (the canonical anti-pattern) is avoided because humans never edit env branches; only the hydrator writes them.
+3. **Per-env hydration isolation** — a render failure for `prod` doesn't block `dev`'s sync.
+
+What it costs:
+
+- A write-scoped repo Secret (`argocd.argoproj.io/secret-type=repository-write`). See "Enabling Source Hydrator" below.
+- The `commitServer` component runs in `argocd` namespace (added to `core/argocd/values.yaml` with `commitServer.enabled: true`).
+- Still alpha in 3.4.3 — spec/path semantics have shifted across 3.1 → 3.2 → 3.3; pin the chart version and read the upgrade notes before bumping.
 
 ### Initial admin password lifecycle
 
@@ -140,6 +180,40 @@ Fine-grained PAT at <https://github.com/settings/personal-access-tokens/new>:
 
 The label `argocd.argoproj.io/secret-type=repository` is what makes ArgoCD pick the Secret up — without it the Secret is invisible. ArgoCD matches it to any Application whose `repoURL` equals the Secret's `url` field.
 
+### Enabling Source Hydrator (one-time, after initial bootstrap)
+
+The argocd values commit turns on `commitServer.enabled: true` and `hydrator.enabled: true`. Two more pieces have to land out-of-band before any Application with a `sourceHydrator` field can sync:
+
+```bash
+# 1. Create a separate WRITE-scoped GitHub PAT:
+#    Permissions → Contents: Read AND write
+#    (Same repo selection as the existing read PAT.)
+
+# 2. Register it as a write secret (distinct from the existing read secret).
+read -s -p "WRITE PAT: " PAT && echo
+kubectl -n argocd create secret generic aura-gitops-repo-write \
+  --from-literal=type=git \
+  --from-literal=url=https://github.com/AuraAITools/gitops.git \
+  --from-literal=username=<gh-username> \
+  --from-literal=password="$PAT"
+unset PAT
+kubectl -n argocd label secret aura-gitops-repo-write \
+  argocd.argoproj.io/secret-type=repository-write
+
+# 3. Create the env branches as empty orphans. The hydrator can also create
+#    these on first run, but pre-creating avoids a chicken-and-egg if it
+#    doesn't auto-create on your version.
+for env in dev staging prod; do
+  git checkout --orphan "environments/$env"
+  git rm -rf . >/dev/null 2>&1 || true
+  git commit --allow-empty -m "init environments/$env"
+  git push origin "environments/$env"
+done
+git checkout main
+```
+
+The pull secret (`aura-gitops-repo`, label `repository`) and the push secret (`aura-gitops-repo-write`, label `repository-write`) are deliberately separate — ArgoCD treats them as two different credentials so a leaked read PAT can't write.
+
 ### If you applied `root-app` before the credential existed
 
 The Application gets stuck on `Unknown / Healthy` waiting on Git auth. After creating the Secret, force an immediate reconcile instead of waiting on the 3-min poll:
@@ -155,8 +229,14 @@ kubectl -n argocd annotate application root \
 # All Applications should be Synced + Healthy within a few minutes
 kubectl -n argocd get applications
 
-# Expect: root, argocd, istio-base, istiod, istio-gateway, argocd-routing,
-#         kube-prometheus-stack, kiali
+# Expect (19 Applications total):
+#   root
+#   argocd, istio-base, istiod, istio-gateway, argocd-routing
+#   kube-prometheus-stack, kiali
+#   apps-project, cloudnative-pg
+#   postgres-aura-{dev,staging,prod}
+#   postgres-keycloak-{dev,staging,prod}
+#   postgres-spicedb-{dev,staging,prod}
 ```
 
 Smoke-test self-management: change `core/argocd/values.yaml`, commit, push. The `argocd` Application drifts to OutOfSync then self-heals within ~3 min (or instantly with a Git webhook).
@@ -240,4 +320,7 @@ The bootstrap is idempotent. Re-run steps 3 → 6 above against a fresh cluster.
 - [ ] **cert-manager** for TLS at `*.lab.lan`. Options: self-signed CA via the cert-manager bootstrap Issuer (zero external deps, browser warnings) or Let's Encrypt via DNS-01 if the lab domain ever becomes routable. Currently all routing is plain HTTP, which is OK on the LAN only.
 - [ ] **Istio routing for Grafana + Kiali** — `grafana.lab.lan` / `kiali.lab.lan` VirtualServices. Will also be the point to refactor `argocd-gateway` → a shared `public-gateway` with `*.lab.lan`.
 - [ ] **Tracing** — Tempo (or Jaeger), wired into Kiali's `external_services.tracing`.
-- [ ] **Source Hydrator enablement** — once an `apps/<svc>/overlays/<env>/` tree exists. Strategy memo and project memory both have this as day-one for app workloads.
+- [x] ~~**Source Hydrator enablement**~~ — landed with Postgres (`apps/postgres/overlays/<env>` → `environments/<env>` branches). Spec is `spec.sourceHydrator` on every app Application; see Concepts.
+- [ ] **CNPG backups** — `Cluster.spec.backup` to S3/MinIO with PITR. Required before any real prod use. Currently marked `# TODO` in `apps/postgres/overlays/prod/kustomization.yaml`.
+- [ ] **Postgres connection from app pods** — each cluster auto-generates `postgres-<db>-app` Secret per env (so `postgres-aura-app`, `postgres-keycloak-app`, `postgres-spicedb-app` in each `apps-<env>` namespace). App workloads consume it via env vars or projected files.
+- [ ] **ApplicationSet refactor** — at 9 Postgres Applications, the duplication in `bootstrap/apps/postgres-*.yaml` is real. A matrix generator over `(db, env)` would collapse all 9 into a single ApplicationSet. Defer until Source Hydrator's behavior is settled (don't compound two alpha-adjacent features).

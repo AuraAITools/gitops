@@ -5,6 +5,13 @@ configs:
   params:
     server.insecure: true
     application.namespaces: "argocd,apps-*"
+    # Source Hydrator (alpha in 3.4.3) — renders DRY sources to environments/<env>
+    # branches before sync. Requires commitServer enabled below + a write-scoped
+    # repo secret labeled argocd.argoproj.io/secret-type=repository-write.
+    hydrator.enabled: "true"
+
+commitServer:
+  enabled: true
 
 server:
   service:
