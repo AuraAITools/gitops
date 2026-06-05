@@ -3030,3 +3030,21 @@ spec:
         - configMap:
             name: keycloak-realm-import
           name: realm-import
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: keycloak
+  namespace: apps-prod
+spec:
+  gateways:
+    - istio-ingress/public-gateway
+  hosts:
+    - accounts.lab.lan
+    - admin-accounts.lab.lan
+  http:
+    - route:
+        - destination:
+            host: keycloak.apps-prod.svc.cluster.local
+            port:
+              number: 8080
