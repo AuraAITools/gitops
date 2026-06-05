@@ -1,0 +1,23 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres-aura
+  namespace: apps-prod
+spec:
+  bootstrap:
+    initdb:
+      database: aura
+      owner: aura
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.0
+  instances: 2
+  monitoring:
+    enablePodMonitor: true
+  podMetadata:
+    annotations:
+      sidecar.istio.io/inject: "false"
+  postgresql:
+    parameters:
+      shared_buffers: 128MB
+  primaryUpdateStrategy: unsupervised
+  storage:
+    size: 10Gi
