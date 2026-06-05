@@ -9,12 +9,12 @@ spec:
       database: keycloak
       owner: keycloak
   imageName: ghcr.io/cloudnative-pg/postgresql:16.4
+  inheritedMetadata:
+    annotations:
+      sidecar.istio.io/inject: "false"
   instances: 2
   monitoring:
     enablePodMonitor: true
-  podMetadata:
-    annotations:
-      sidecar.istio.io/inject: "false"
   postgresql:
     parameters:
       shared_buffers: 128MB
