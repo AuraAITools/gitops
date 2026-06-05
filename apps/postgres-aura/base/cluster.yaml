@@ -16,7 +16,9 @@ spec:
     parameters:
       shared_buffers: "128MB"
 
-  podMetadata:
+  # Inherited by all CNPG-managed resources (pods + services + secrets).
+  # The istio inject=false annotation only matters on pods; harmless elsewhere.
+  inheritedMetadata:
     annotations:
       sidecar.istio.io/inject: "false"
 
