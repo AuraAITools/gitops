@@ -1,16 +1,16 @@
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
-  name: argocd-server
-  namespace: argocd
+  name: keycloak
 spec:
   hosts:
-    - argocd.lab.lan
+    - accounts-dev.lab.lan
+    - admin-accounts-dev.lab.lan
   gateways:
     - istio-ingress/public-gateway
   http:
     - route:
         - destination:
-            host: argocd-server.argocd.svc.cluster.local
+            host: keycloak.apps-dev.svc.cluster.local
             port:
-              number: 80
+              number: 8080

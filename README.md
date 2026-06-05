@@ -17,6 +17,91 @@ GitOps config repo for AuraAITools. ArgoCD reconciles every cluster from this re
 - Grafana: `admin` / `admin` (set in `core/monitoring/values.yaml`)
 - Kiali: anonymous (homelab only — change `auth.strategy` before any shared env)
 
+## Application endpoints
+
+External URLs follow the homelab pattern `<svc>[-<env>].lab.lan`. All public-facing services attach to a single shared `*.lab.lan` Istio `Gateway` (`istio-ingress/public-gateway`, installed by the `routing` Application at sync-wave 3); each app's own `VirtualService` adds its concrete host.
+
+Hosts shown with ⏳ are waiting on either the per-service `VirtualService` to land in this repo **or** the hostname being added to your DNS (see [DNS setup](#dns-setup) below). Hosts shown with ❌ are for services not yet deployed.
+
+### Per-environment hosts
+
+| Service              | Dev                              | Staging                              | Prod                          | Status |
+| :------------------- | :------------------------------- | :----------------------------------- | :---------------------------- | :----- |
+| **BFF** (aura-report-website) | `app-dev.lab.lan` ❌      | `app-staging.lab.lan` ❌             | `app.lab.lan` ❌              | not deployed |
+| **report-ms** (Java backend)  | `api-dev.lab.lan` ✅      | `api-staging.lab.lan` ❌             | `api.lab.lan` ✅              | dev + prod deployed (needs `ecr-pull` + `report-ms-secrets` imperative bootstrap, see below); staging not deployed |
+| **Keycloak** (public OIDC)    | `accounts-dev.lab.lan` ✅ | `accounts-staging.lab.lan` ❌        | `accounts.lab.lan` ✅         | dev + prod deployed (VirtualService wired); staging not deployed |
+| **Keycloak** (admin console)  | `admin-accounts-dev.lab.lan` ✅ | `admin-accounts-staging.lab.lan` ❌ | `admin-accounts.lab.lan` ✅   | dev + prod deployed (VirtualService wired); staging not deployed |
+| **SpiceDB** (gRPC, internal)  | n/a                              | n/a                                  | n/a                           | not deployed |
+
+### DNS setup
+
+The shared Gateway listens on `*.lab.lan`, but `/etc/hosts` doesn't support wildcards — each hostname has to resolve to the gateway's external IP individually. Two options:
+
+```bash
+# Find the gateway's external IP (with k3d on the Mac mini, this is usually 127.0.0.1)
+kubectl -n istio-ingress get svc istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}'; echo
+```
+
+**Option A — `/etc/hosts` (simplest, one line per hostname):**
+
+```
+127.0.0.1   argocd.lab.lan
+127.0.0.1   accounts-dev.lab.lan
+127.0.0.1   admin-accounts-dev.lab.lan
+127.0.0.1   accounts.lab.lan
+127.0.0.1   admin-accounts.lab.lan
+```
+
+**Option B — `dnsmasq` (true wildcard, one line covers all current + future hosts):**
+
+```
+# /opt/homebrew/etc/dnsmasq.conf  (on the Mac mini)
+address=/lab.lan/127.0.0.1
+```
+
+Then `sudo brew services restart dnsmasq` and point your laptop's resolver at the Mac mini's IP for the `lab.lan` zone. Option B is what to land before adding many more `*.lab.lan` services.
+
+### In-cluster DNS (always works once the Service exists)
+
+App-to-app calls inside the mesh use cluster DNS — short form within the same namespace, FQDN across.
+
+| Service              | In-cluster URL (same-ns short form)               | Cross-ns FQDN                                     |
+| :------------------- | :------------------------------------------------ | :------------------------------------------------ |
+| BFF                  | `http://aura-report-website:3000`                 | `http://aura-report-website.apps-<env>.svc:3000`  |
+| report-ms (HTTP/GraphQL) | `http://report-ms:8080`                       | `http://report-ms.apps-<env>.svc:8080`            |
+| Keycloak             | `http://keycloak:8080`                            | `http://keycloak.apps-<env>.svc:8080`             |
+| SpiceDB (gRPC)       | `spicedb:50051`                                   | `spicedb.apps-<env>.svc:50051`                    |
+| postgres-aura (rw)   | `postgres-aura-rw:5432`                           | `postgres-aura-rw.apps-<env>.svc:5432`            |
+| postgres-keycloak (rw) | `postgres-keycloak-rw:5432`                     | `postgres-keycloak-rw.apps-<env>.svc:5432`        |
+| postgres-spicedb (rw) | `postgres-spicedb-rw:5432`                       | `postgres-spicedb-rw.apps-<env>.svc:5432`         |
+
+### Port-forward (poking from your laptop until routing is up)
+
+```bash
+# Keycloak — dev (substitute apps-prod for prod)
+kubectl -n apps-dev port-forward svc/keycloak 8081:8080
+# http://localhost:8081  — admin / admin (rotate immediately)
+
+# report-ms — once deployed
+kubectl -n apps-dev port-forward svc/report-ms 8082:8080
+# GraphQL at http://localhost:8082/graphql, actuator at /actuator/health
+
+# BFF — once deployed
+kubectl -n apps-dev port-forward svc/aura-report-website 3000:3000
+# http://localhost:3000
+
+# Postgres (psql via the cnpg plugin or raw)
+kubectl -n apps-dev port-forward svc/postgres-aura-rw 5432:5432
+# psql "postgresql://aura:$(kubectl -n apps-dev get secret postgres-aura-app -o jsonpath='{.data.password}' | base64 -d)@localhost:5432/aura"
+```
+
+### Initial credentials
+
+| Service                     | User    | Password source                                                                                                       |
+| :-------------------------- | :------ | :-------------------------------------------------------------------------------------------------------------------- |
+| Keycloak admin console (all envs) | `admin` | base-encoded `admin` in `apps/keycloak/base/admin-secret.yaml` — **rotate via the Keycloak admin console after first login** |
+| Postgres app users (all DBs / envs) | `<dbname>` (e.g. `aura`, `keycloak`, `spicedb`) | CNPG-generated `postgres-<db>-app` Secret in `apps-<env>`. Key: `password`. |
+
 ## Layout
 
 ```
@@ -27,18 +112,23 @@ bootstrap/
     ├── istio-base.yaml              # CRDs                          (sync-wave 0)
     ├── istiod.yaml                  # control plane                 (sync-wave 1)
     ├── istio-gateway.yaml           # ingress gateway               (sync-wave 2)
-    ├── argocd-routing.yaml          # expose argocd UI              (sync-wave 3)
+    ├── routing.yaml                 # shared *.lab.lan Gateway      (sync-wave 3)
+    ├── argocd-routing.yaml          # argocd.lab.lan VirtualService (sync-wave 3)
     ├── kube-prometheus-stack.yaml   # Prom + Grafana + Alertmgr     (sync-wave 4)
     ├── kiali.yaml                   # mesh topology dashboard       (sync-wave 5)
     ├── apps-project.yaml            # AppProject + apps-{dev,staging,prod} ns (wave 6)
     ├── cloudnative-pg.yaml          # CNPG operator                 (sync-wave 6)
-    └── postgres-<db>-<env>.yaml     # 3 databases × 3 envs = 9 Apps (sync-wave 7)
-                                     # db ∈ {aura, keycloak, spicedb}
-                                     # env ∈ {dev, staging, prod}
+    ├── postgres-<db>-<env>.yaml     # 3 databases × 3 envs = 9 Apps (sync-wave 7)
+    │                                # db ∈ {aura, keycloak, spicedb}
+    │                                # env ∈ {dev, staging, prod}
+    ├── keycloak-{dev,prod}.yaml     # IdP                           (sync-wave 8)
+    └── report-ms-{dev,prod}.yaml    # Java backend                  (sync-wave 9)
 core/                                # values / overlays for platform components
 ├── argocd/
 │   ├── values.yaml
-│   └── routing/                     # Gateway + VirtualService for argocd.lab.lan
+│   └── routing/                     # VirtualService → argocd.lab.lan (attaches to public-gateway)
+├── routing/
+│   └── public-gateway.yaml          # shared Gateway in istio-ingress; hosts: ["*.lab.lan"]
 ├── istio/{istiod,gateway}-values.yaml
 ├── monitoring/values.yaml           # kube-prometheus-stack
 ├── kiali/values.yaml
@@ -51,9 +141,15 @@ apps/                                # application workloads (DRY tree, hydrated
 ├── postgres-keycloak/               # identity provider DB
 │   ├── base/                        # name: postgres-keycloak, db: keycloak
 │   └── overlays/{dev,staging,prod}/
-└── postgres-spicedb/                # authorization (Zanzibar) DB
-    ├── base/                        # name: postgres-spicedb, db: spicedb
-    └── overlays/{dev,staging,prod}/
+├── postgres-spicedb/                # authorization (Zanzibar) DB
+│   ├── base/                        # name: postgres-spicedb, db: spicedb
+│   └── overlays/{dev,staging,prod}/
+├── keycloak/                        # IdP
+│   ├── base/                        # Deployment + Service + admin Secret + realm.json
+│   └── overlays/{dev,prod}/         # per-env KC_HOSTNAME + VirtualService
+└── report-ms/                       # Java backend (Spring Boot)
+    ├── base/                        # Deployment + Service + ConfigMap (constants)
+    └── overlays/{dev,prod}/         # per-env S3 bucket + VirtualService
 ```
 
 ## Pinned versions
@@ -89,11 +185,13 @@ Waves in this repo:
 | `0`  | `istio-base`     | Installs the Istio CRDs. Everything below references them — without these, manifests fail.      |
 | `1`  | `istiod`         | The control plane; admission webhook for sidecar injection. Gateways can't come up without it.  |
 | `2`  | `istio-gateway`  | Gateway pods need sidecars injected by `istiod`, so this can't race ahead.                      |
-| `3`  | `argocd-routing` | `Gateway` + `VirtualService` for `argocd.lab.lan` — needs istiod (CRD validation) + gateway up. |
+| `3`  | `routing`, `argocd-routing` | Shared `public-gateway` (hosts `*.lab.lan`) + argocd's `VirtualService`. Every other service attaches a VirtualService later — no per-app Gateway needed. |
 | `4`  | `kube-prometheus-stack` | Prometheus + Grafana + Alertmanager + node-exporter + kube-state-metrics. No hard dep on Istio at sync time, but scrapes envoy sidecars and istiod once they're up. |
 | `5`  | `kiali`          | Service mesh dashboard. Reads from the Prometheus that wave 4 just installed. |
 | `6`  | `apps-project`, `cloudnative-pg` | AppProject `apps` + 3 env namespaces (`apps-{dev,staging,prod}`) and the CNPG operator install in parallel. App workloads in wave 7 need both. |
 | `7`  | `postgres-{aura,keycloak,spicedb}-{dev,staging,prod}` | Nine `Cluster` CRs — 3 databases × 3 envs. Each materialized via Source Hydrator from `apps/postgres-<db>/overlays/<env>` → `environments/<env>` branches. |
+| `8`  | `keycloak-{dev,prod}` | IdP — needs `postgres-keycloak` (wave 7). |
+| `9`  | `report-ms-{dev,prod}` | Java backend — needs `postgres-aura` (wave 7) for JDBC + Keycloak (wave 8) for OIDC. Reaches SpiceDB at `spicedb:50051` when that lands. |
 
 Two things to remember:
 
@@ -214,6 +312,51 @@ git checkout main
 
 The pull secret (`aura-gitops-repo`, label `repository`) and the push secret (`aura-gitops-repo-write`, label `repository-write`) are deliberately separate — ArgoCD treats them as two different credentials so a leaked read PAT can't write.
 
+### Imperative Secrets for `report-ms` (per env, until SOPS+age lands)
+
+`report-ms` pulls from private ECR and consumes a bag of credentials. Until SOPS ships, both Secrets are created imperatively per env. The Deployment references them by name (`ecr-pull`, `report-ms-secrets`) — without them, pods sit in `ImagePullBackOff` or `CreateContainerConfigError`.
+
+**1. ECR pull secret** (`ecr-pull`) — needs to land in every `apps-<env>` namespace. ECR tokens expire after 12 hours, so production wants the CronJob rotator from `AURA_STACK_DEPLOYMENT.md` §6.1; for first-light dev work, the one-shot below is enough:
+
+```bash
+AWS_REGION=ap-southeast-1
+AWS_ACCT=696085047789
+for ns in apps-dev apps-prod; do
+  TOKEN="$(aws ecr get-login-password --region "$AWS_REGION")"
+  kubectl -n "$ns" create secret docker-registry ecr-pull \
+    --docker-server="${AWS_ACCT}.dkr.ecr.${AWS_REGION}.amazonaws.com" \
+    --docker-username=AWS \
+    --docker-password="$TOKEN" \
+    --dry-run=client -o yaml | kubectl apply -f -
+done
+unset TOKEN
+```
+
+Re-run before the 12h ECR token expires, or set up the CronJob rotator. (Backlog item.)
+
+**2. `report-ms-secrets`** — sensitive env vars consumed via `envFrom: secretRef`. Replace the placeholder values with real ones before running:
+
+```bash
+for ns in apps-dev apps-prod; do
+  kubectl -n "$ns" create secret generic report-ms-secrets \
+    --from-literal=KEYCLOAK_CLIENT_SECRET='super-secret-shit' \
+    --from-literal=KEYCLOAK_CLIENT_UUID='d388a85a-26ed-48e1-a9a4-57b87c77dc61' \
+    --from-literal=SPICEDB_PRESHARED_KEY='dev-secret-key' \
+    --from-literal=AWS_ACCESS_KEY='test' \
+    --from-literal=AWS_SECRET_ACCESS_KEY='REPLACE_ME' \
+    --from-literal=MAIL_PASSWORD='REPLACE_ME_GMAIL_APP_PASSWORD' \
+    --dry-run=client -o yaml | kubectl apply -f -
+done
+```
+
+Keys must match `base/configmap.yaml`'s `envFrom` contract:
+- `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_CLIENT_UUID` — get from Keycloak's `aura-application-client` (Credentials tab).
+- `SPICEDB_PRESHARED_KEY` — same value that SpiceDB is configured with (`--grpc-preshared-key`); the SpiceDB Application will inject it on its side.
+- `AWS_ACCESS_KEY` / `AWS_SECRET_ACCESS_KEY` — IAM user with S3 access to the per-env bucket (`aura-dev`, `aura-prod`).
+- `MAIL_PASSWORD` — Gmail app-specific password.
+
+Different values per env? Run the `for` loop with two separate calls. The bucket name itself is **not** here — it lives in `apps/report-ms/overlays/<env>/kustomization.yaml` as `AWS_S3_BUCKET_NAME`.
+
 ### If you applied `root-app` before the credential existed
 
 The Application gets stuck on `Unknown / Healthy` waiting on Git auth. After creating the Secret, force an immediate reconcile instead of waiting on the 3-min poll:
@@ -316,9 +459,11 @@ The bootstrap is idempotent. Re-run steps 3 → 6 above against a fresh cluster.
 
 ## Backlog
 
+- [ ] **ECR pull-credential rotator** — CronJob in each `apps-<env>` ns that re-runs `aws ecr get-login-password` every 8h and overwrites the `ecr-pull` Secret. Until this lands, the one-shot `kubectl create secret docker-registry` above has a 12-hour expiry window. See `AURA_STACK_DEPLOYMENT.md` §6.1.
 - [ ] **Secrets management — SOPS + age.** Per the strategy doc, Sealed Secrets is an anti-pattern for this setup (single controller-key fragility, per-cluster ciphertext, manual DR). The chosen direction is SOPS + age with a KSOPS sidecar in `argocd-repo-server`. Removes the imperative PAT bootstrap and lets app secrets live encrypted in Git.
 - [ ] **cert-manager** for TLS at `*.lab.lan`. Options: self-signed CA via the cert-manager bootstrap Issuer (zero external deps, browser warnings) or Let's Encrypt via DNS-01 if the lab domain ever becomes routable. Currently all routing is plain HTTP, which is OK on the LAN only.
-- [ ] **Istio routing for Grafana + Kiali** — `grafana.lab.lan` / `kiali.lab.lan` VirtualServices. Will also be the point to refactor `argocd-gateway` → a shared `public-gateway` with `*.lab.lan`.
+- [ ] **Istio routing for Grafana + Kiali** — `grafana.lab.lan` / `kiali.lab.lan` VirtualServices attaching to the shared `public-gateway`.
+- [x] ~~**`public-gateway` refactor**~~ — landed. One Gateway in `istio-ingress` listens on `*.lab.lan`; per-service `VirtualService` lives with the app. Adding a new public host is now a single-resource change.
 - [ ] **Tracing** — Tempo (or Jaeger), wired into Kiali's `external_services.tracing`.
 - [x] ~~**Source Hydrator enablement**~~ — landed with Postgres (`apps/postgres/overlays/<env>` → `environments/<env>` branches). Spec is `spec.sourceHydrator` on every app Application; see Concepts.
 - [ ] **CNPG backups** — `Cluster.spec.backup` to S3/MinIO with PITR. Required before any real prod use. Currently marked `# TODO` in `apps/postgres/overlays/prod/kustomization.yaml`.

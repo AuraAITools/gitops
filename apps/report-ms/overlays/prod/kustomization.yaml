@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - virtualservice.yaml
+namespace: apps-prod
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: report-ms-config
+    patch: |
+      - op: add
+        path: /data/AWS_S3_BUCKET_NAME
+        value: "aura-prod"
+  - target:
+      kind: Deployment
+      name: report-ms
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+# TODO: bump replicas + tighten resource limits once we have actual prod load shape.

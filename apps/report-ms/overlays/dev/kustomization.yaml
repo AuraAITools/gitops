@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - virtualservice.yaml
+namespace: apps-dev
+
+patches:
+  # Per-env: S3 bucket. ConfigMap merge — the base ConfigMap data is preserved.
+  - target:
+      kind: ConfigMap
+      name: report-ms-config
+    patch: |
+      - op: add
+        path: /data/AWS_S3_BUCKET_NAME
+        value: "aura-dev"

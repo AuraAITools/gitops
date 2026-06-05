@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: report-ms
+  labels:
+    app: report-ms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: report-ms
+  template:
+    metadata:
+      labels:
+        app: report-ms
+    spec:
+      imagePullSecrets:
+        - name: ecr-pull
+      containers:
+        - name: report-ms
+          image: 696085047789.dkr.ecr.ap-southeast-1.amazonaws.com/aura:report-ms
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            # Non-sensitive constants (KEYCLOAK_CLIENT_ID, AURA_EMAIL_FROM_ADDRESS,
+            # AWS_REGION, SPICEDB_TARGET, etc.) — overlay patches what differs per env.
+            - configMapRef:
+                name: report-ms-config
+            # KEYCLOAK_CLIENT_SECRET, SPICEDB_PRESHARED_KEY, AWS_ACCESS_KEY,
+            # AWS_SECRET_ACCESS_KEY, MAIL_PASSWORD — created imperatively until
+            # SOPS+age lands. See README bootstrap for the kubectl create command.
+            - secretRef:
+                name: report-ms-secrets
+          env:
+            # DB connection — username + password come from CNPG's auto-generated
+            # postgres-aura-app Secret in the same namespace. URL stays static
+            # because the rw service has the same name in every apps-<env> ns.
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-aura-app
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-aura-app
+                  key: password
+            - name: DB_URL
+              value: "jdbc:postgresql://postgres-aura-rw:5432/aura"
+          resources:
+            requests:
+              cpu: 300m
+              memory: 500Mi
+            limits:
+              cpu: 700m
+              memory: 1000Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5

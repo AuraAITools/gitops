@@ -1,0 +1,35 @@
+# Non-sensitive constants only. Anything per-env (S3 bucket) is patched in the
+# overlay; anything credential-like (KEYCLOAK_CLIENT_SECRET, AWS_*, MAIL_PASSWORD,
+# SPICEDB_PRESHARED_KEY) lives in the imperative `report-ms-secrets` Secret.
+#
+# Cluster-DNS short-form works because report-ms runs in apps-<env> and so do
+# its dependencies (keycloak, spicedb, postgres-aura-rw). Same namespace → no
+# FQDN needed → no per-env overlay needed for these.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: report-ms-config
+data:
+  SPRING_PROFILES_ACTIVE: "cloud"
+
+  # Keycloak — internal cluster DNS for backchannel calls (JWK fetch, admin API).
+  # If report-ms enforces strict `iss` claim validation, set Keycloak's
+  # KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true or override Spring's `issuer-uri` in
+  # application.yml to the external accounts.* hostname.
+  KEYCLOAK_CLIENT_ID: "aura-application-client"
+  KEYCLOAK_CLIENT_REALM: "aura"
+  KEYCLOAK_CLIENT_SERVER_URL: "http://keycloak:8080"
+  JWK_SET_URI: "http://keycloak:8080/realms/aura/protocol/openid-connect/certs"
+
+  # SpiceDB — gRPC on :50051, plaintext on the homelab (Istio mTLS will cover
+  # in-mesh later). Flip SPICEDB_PLAINTEXT=false once STRICT mTLS is on.
+  SPICEDB_TARGET: "spicedb:50051"
+  SPICEDB_PLAINTEXT: "true"
+
+  # Mail (SMTP) — username + from-address are non-sensitive; MAIL_PASSWORD is a
+  # Gmail app-password and lives in the Secret.
+  AURA_EMAIL_FROM_ADDRESS: "kevinliusingapore@gmail.com"
+  MAIL_USERNAME: "kevinliusingapore@gmail.com"
+
+  # AWS — region is non-sensitive; access key/secret + bucket are per-env.
+  AWS_REGION: "ap-southeast-1"

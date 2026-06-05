@@ -1,16 +1,15 @@
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
-  name: argocd-server
-  namespace: argocd
+  name: report-ms
 spec:
   hosts:
-    - argocd.lab.lan
+    - api.lab.lan
   gateways:
     - istio-ingress/public-gateway
   http:
     - route:
         - destination:
-            host: argocd-server.argocd.svc.cluster.local
+            host: report-ms.apps-prod.svc.cluster.local
             port:
-              number: 80
+              number: 8080

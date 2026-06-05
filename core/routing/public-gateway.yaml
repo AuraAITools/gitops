@@ -1,0 +1,21 @@
+# One Gateway, one wildcard host suffix. Every public-facing service in the
+# cluster (argocd, keycloak, BFF, report-ms, grafana, kiali...) attaches via a
+# VirtualService in its own namespace that references istio-ingress/public-gateway
+# and lists a concrete `<svc>[-<env>].lab.lan` host.
+#
+# Adding a new app no longer means adding a Gateway — only a VirtualService.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: public-gateway
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "*.lab.lan"

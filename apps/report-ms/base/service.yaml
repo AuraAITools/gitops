@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: report-ms
+  labels:
+    app: report-ms
+spec:
+  type: ClusterIP
+  selector:
+    app: report-ms
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
