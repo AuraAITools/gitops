@@ -1,0 +1,119 @@
+apiVersion: v1
+data:
+  AURA_EMAIL_FROM_ADDRESS: kevinliusingapore@gmail.com
+  AWS_REGION: ap-southeast-1
+  AWS_S3_BUCKET_NAME: aura-dev
+  JWK_SET_URI: http://keycloak:8080/realms/aura/protocol/openid-connect/certs
+  KEYCLOAK_CLIENT_ID: aura-application-client
+  KEYCLOAK_CLIENT_REALM: aura
+  KEYCLOAK_CLIENT_SERVER_URL: http://keycloak:8080
+  MAIL_USERNAME: kevinliusingapore@gmail.com
+  SPICEDB_PLAINTEXT: "true"
+  SPICEDB_TARGET: spicedb:50051
+  SPRING_PROFILES_ACTIVE: cloud
+kind: ConfigMap
+metadata:
+  name: report-ms-config
+  namespace: apps-dev
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: report-ms
+  name: report-ms
+  namespace: apps-dev
+spec:
+  ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    app: report-ms
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: report-ms
+  name: report-ms
+  namespace: apps-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: report-ms
+  template:
+    metadata:
+      labels:
+        app: report-ms
+    spec:
+      containers:
+        - env:
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  key: username
+                  name: postgres-aura-app
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: password
+                  name: postgres-aura-app
+            - name: DB_URL
+              value: jdbc:postgresql://postgres-aura-rw:5432/aura
+          envFrom:
+            - configMapRef:
+                name: report-ms-config
+            - secretRef:
+                name: report-ms-secrets
+          image: 696085047789.dkr.ecr.ap-southeast-1.amazonaws.com/aura:report-ms
+          imagePullPolicy: Always
+          livenessProbe:
+            failureThreshold: 5
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 5
+          name: report-ms
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            failureThreshold: 30
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            limits:
+              cpu: 700m
+              memory: 1000Mi
+            requests:
+              cpu: 300m
+              memory: 500Mi
+      imagePullSecrets:
+        - name: ecr-pull
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: report-ms
+  namespace: apps-dev
+spec:
+  gateways:
+    - istio-ingress/public-gateway
+  hosts:
+    - api-dev.lab.lan
+  http:
+    - route:
+        - destination:
+            host: report-ms.apps-dev.svc.cluster.local
+            port:
+              number: 8080
