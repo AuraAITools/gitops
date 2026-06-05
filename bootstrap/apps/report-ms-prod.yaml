@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: report-ms-prod
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+  annotations:
+    argocd.argoproj.io/sync-wave: "9"
+spec:
+  project: apps
+  sourceHydrator:
+    drySource:
+      repoURL: https://github.com/AuraAITools/gitops.git
+      targetRevision: main
+      path: apps/report-ms/overlays/prod
+    syncSource:
+      targetBranch: environments/prod
+      path: apps/report-ms/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: apps-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

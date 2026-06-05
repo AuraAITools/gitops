@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: report-ms-dev
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+  annotations:
+    # Wave 9 — needs Keycloak (wave 8) running for OIDC + postgres-aura (wave 7)
+    # for the JDBC connection at Spring Boot startup.
+    argocd.argoproj.io/sync-wave: "9"
+spec:
+  project: apps
+  sourceHydrator:
+    drySource:
+      repoURL: https://github.com/AuraAITools/gitops.git
+      targetRevision: main
+      path: apps/report-ms/overlays/dev
+    syncSource:
+      targetBranch: environments/dev
+      path: apps/report-ms/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: apps-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
