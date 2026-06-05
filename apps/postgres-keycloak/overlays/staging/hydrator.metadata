@@ -1,0 +1,7 @@
+{
+  "repoURL": "https://github.com/AuraAITools/gitops.git",
+  "drySha": "6747ecda0383a4a068bfcaf1be78fb3f0f9fa436",
+  "commands": [
+    "kustomize build ./apps/postgres-keycloak/overlays/staging"
+  ]
+}
