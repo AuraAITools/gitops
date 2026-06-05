@@ -1,0 +1,98 @@
+apiVersion: v1
+data:
+  KEYCLOAK_CLIENT_ID: aura-application-client
+  KEYCLOAK_ISSUER: http://accounts-dev.lab.lan/realms/aura
+  NEXT_PUBLIC_REPORT_SERVICE_URL: http://api-dev.lab.lan
+  NEXTAUTH_URL: http://app-dev.lab.lan
+  NODE_ENV: production
+kind: ConfigMap
+metadata:
+  name: bff-config
+  namespace: apps-dev
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: aura-report-website
+  name: aura-report-website
+  namespace: apps-dev
+spec:
+  ports:
+    - name: http
+      port: 3000
+      protocol: TCP
+      targetPort: 3000
+  selector:
+    app: aura-report-website
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: aura-report-website
+  name: aura-report-website
+  namespace: apps-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aura-report-website
+  template:
+    metadata:
+      labels:
+        app: aura-report-website
+    spec:
+      containers:
+        - envFrom:
+            - configMapRef:
+                name: bff-config
+            - secretRef:
+                name: bff-secrets
+          image: 696085047789.dkr.ecr.ap-southeast-1.amazonaws.com/aura:aura-report-website
+          imagePullPolicy: Always
+          livenessProbe:
+            failureThreshold: 5
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            tcpSocket:
+              port: 3000
+            timeoutSeconds: 3
+          name: aura-report-website
+          ports:
+            - containerPort: 3000
+              name: http
+          readinessProbe:
+            failureThreshold: 12
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            tcpSocket:
+              port: 3000
+            timeoutSeconds: 3
+          resources:
+            limits:
+              cpu: 300m
+              memory: 400Mi
+            requests:
+              cpu: 100m
+              memory: 100Mi
+      imagePullSecrets:
+        - name: ecr-pull
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: aura-report-website
+  namespace: apps-dev
+spec:
+  gateways:
+    - istio-ingress/public-gateway
+  hosts:
+    - app-dev.lab.lan
+  http:
+    - route:
+        - destination:
+            host: aura-report-website.apps-dev.svc.cluster.local
+            port:
+              number: 3000

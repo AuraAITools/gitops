@@ -1,0 +1,7 @@
+{
+  "repoURL": "https://github.com/AuraAITools/gitops.git",
+  "drySha": "1a47599ac49ffd49aa0814d7ec713229d5ff12b9",
+  "commands": [
+    "kustomize build ./apps/aura-report-website/overlays/dev"
+  ]
+}
