@@ -1,0 +1,15 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: report-ms
+spec:
+  hosts:
+    - api-dev.lab.lan
+  gateways:
+    - istio-ingress/public-gateway
+  http:
+    - route:
+        - destination:
+            host: report-ms.apps-dev.svc.cluster.local
+            port:
+              number: 8080
