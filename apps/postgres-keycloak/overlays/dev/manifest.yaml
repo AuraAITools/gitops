@@ -1,0 +1,23 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres-keycloak
+  namespace: apps-dev
+spec:
+  bootstrap:
+    initdb:
+      database: keycloak
+      owner: keycloak
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.4
+  instances: 1
+  monitoring:
+    enablePodMonitor: true
+  podMetadata:
+    annotations:
+      sidecar.istio.io/inject: "false"
+  postgresql:
+    parameters:
+      shared_buffers: 128MB
+  primaryUpdateStrategy: unsupervised
+  storage:
+    size: 2Gi
