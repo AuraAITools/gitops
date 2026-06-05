@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:25.0
+          args: ["start", "--import-realm"]
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+          envFrom:
+            # KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD — bootstrap admin user.
+            - secretRef:
+                name: keycloak-admin-secret
+          env:
+            # DB credentials come from the CNPG-generated `postgres-keycloak-app`
+            # Secret. The app user is `keycloak` (matches Cluster.bootstrap.initdb.owner).
+            - name: KC_DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-keycloak-app
+                  key: username
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-keycloak-app
+                  key: password
+            - name: KC_DB
+              value: "postgres"
+            # Service name created by CNPG for read-write traffic. Same-namespace
+            # short-form DNS works because Keycloak runs in apps-<env>.
+            - name: KC_DB_URL
+              value: "jdbc:postgresql://postgres-keycloak-rw:5432/keycloak"
+            - name: KC_DB_POOL_MAX_SIZE
+              value: "100"
+            - name: KC_DB_SCHEMA
+              value: "public"
+            # Proxy + hostname — overlay patches KC_HOSTNAME / KC_HOSTNAME_ADMIN per env.
+            - name: KC_PROXY_HEADERS
+              value: "xforwarded"
+            - name: KC_FEATURES
+              value: "hostname:v2"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_LOG
+              value: "console"
+            - name: KC_LOG_LEVEL
+              value: "info"
+            # Management interface (port 9000) — needed for /health/ready + /health/live.
+            # Disabled by default in 25.x; without this the probes 404.
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 9000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: realm-import
+          configMap:
+            name: keycloak-realm-import

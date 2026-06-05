@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - admin-secret.yaml
+
+# Realm import — JSON dropped into /opt/keycloak/data/import via ConfigMap.
+# Carries the `aura` realm (9 clients, seeded users). Disable users in prod
+# overlay if you don't want seeded accounts there.
+configMapGenerator:
+  - name: keycloak-realm-import
+    files:
+      - realm.json
+    options:
+      disableNameSuffixHash: true
