@@ -27,7 +27,7 @@ Hosts shown with ⏳ are waiting on either the per-service `VirtualService` to l
 
 | Service              | Dev                              | Staging                              | Prod                          | Status |
 | :------------------- | :------------------------------- | :----------------------------------- | :---------------------------- | :----- |
-| **BFF** (aura-report-website) | `app-dev.lab.lan` ❌      | `app-staging.lab.lan` ❌             | `app.lab.lan` ❌              | not deployed |
+| **BFF** (aura-report-website) | `app-dev.lab.lan` ✅      | `app-staging.lab.lan` ❌             | `app.lab.lan` ✅              | dev + prod deployed (needs `ecr-pull` + `bff-secrets` imperative bootstrap, see below); staging not deployed |
 | **report-ms** (Java backend)  | `api-dev.lab.lan` ✅      | `api-staging.lab.lan` ❌             | `api.lab.lan` ✅              | dev + prod deployed (needs `ecr-pull` + `report-ms-secrets` imperative bootstrap, see below); staging not deployed |
 | **Keycloak** (public OIDC)    | `accounts-dev.lab.lan` ✅ | `accounts-staging.lab.lan` ❌        | `accounts.lab.lan` ✅         | dev + prod deployed (VirtualService wired); staging not deployed |
 | **Keycloak** (admin console)  | `admin-accounts-dev.lab.lan` ✅ | `admin-accounts-staging.lab.lan` ❌ | `admin-accounts.lab.lan` ✅   | dev + prod deployed (VirtualService wired); staging not deployed |
@@ -122,7 +122,8 @@ bootstrap/
     │                                # db ∈ {aura, keycloak, spicedb}
     │                                # env ∈ {dev, staging, prod}
     ├── keycloak-{dev,prod}.yaml     # IdP                           (sync-wave 8)
-    └── report-ms-{dev,prod}.yaml    # Java backend                  (sync-wave 9)
+    ├── report-ms-{dev,prod}.yaml    # Java backend                  (sync-wave 9)
+    └── aura-report-website-{dev,prod}.yaml  # Next.js BFF           (sync-wave 10)
 core/                                # values / overlays for platform components
 ├── argocd/
 │   ├── values.yaml
@@ -147,9 +148,12 @@ apps/                                # application workloads (DRY tree, hydrated
 ├── keycloak/                        # IdP
 │   ├── base/                        # Deployment + Service + admin Secret + realm.json
 │   └── overlays/{dev,prod}/         # per-env KC_HOSTNAME + VirtualService
-└── report-ms/                       # Java backend (Spring Boot)
-    ├── base/                        # Deployment + Service + ConfigMap (constants)
-    └── overlays/{dev,prod}/         # per-env S3 bucket + VirtualService
+├── report-ms/                       # Java backend (Spring Boot)
+│   ├── base/                        # Deployment + Service + ConfigMap (constants)
+│   └── overlays/{dev,prod}/         # per-env S3 bucket + VirtualService
+└── aura-report-website/             # Next.js BFF
+    ├── base/                        # Deployment + Service + ConfigMap
+    └── overlays/{dev,prod}/         # per-env NEXTAUTH_URL + KEYCLOAK_ISSUER + VirtualService
 ```
 
 ## Pinned versions
@@ -192,6 +196,7 @@ Waves in this repo:
 | `7`  | `postgres-{aura,keycloak,spicedb}-{dev,staging,prod}` | Nine `Cluster` CRs — 3 databases × 3 envs. Each materialized via Source Hydrator from `apps/postgres-<db>/overlays/<env>` → `environments/<env>` branches. |
 | `8`  | `keycloak-{dev,prod}` | IdP — needs `postgres-keycloak` (wave 7). |
 | `9`  | `report-ms-{dev,prod}` | Java backend — needs `postgres-aura` (wave 7) for JDBC + Keycloak (wave 8) for OIDC. Reaches SpiceDB at `spicedb:50051` when that lands. |
+| `10` | `aura-report-website-{dev,prod}` | Next.js BFF — proxies report-ms and redirects browsers to Keycloak's public hostname. |
 
 Two things to remember:
 
@@ -357,6 +362,31 @@ Keys must match `base/configmap.yaml`'s `envFrom` contract:
 
 Different values per env? Run the `for` loop with two separate calls. The bucket name itself is **not** here — it lives in `apps/report-ms/overlays/<env>/kustomization.yaml` as `AWS_S3_BUCKET_NAME`.
 
+### Imperative Secrets for `aura-report-website` (BFF, per env)
+
+Two sensitive env vars: NextAuth session secret + the Keycloak client secret (same `aura-application-client` as report-ms, so reuse the value).
+
+```bash
+# AUTH_SECRET: generate fresh per env. 32 random bytes, base64-encoded.
+AUTH_SECRET_DEV="$(openssl rand -base64 32)"
+AUTH_SECRET_PROD="$(openssl rand -base64 32)"
+
+# Keycloak client secret — same `aura-application-client` as report-ms.
+# Grab it from Keycloak admin: Clients → aura-application-client → Credentials.
+read -s -p "KEYCLOAK_CLIENT_SECRET: " KC_SECRET && echo
+
+for ns in apps-dev apps-prod; do
+  AUTH="$( [ "$ns" = apps-dev ] && echo "$AUTH_SECRET_DEV" || echo "$AUTH_SECRET_PROD" )"
+  kubectl -n "$ns" create secret generic bff-secrets \
+    --from-literal=AUTH_SECRET="$AUTH" \
+    --from-literal=KEYCLOAK_CLIENT_SECRET="$KC_SECRET" \
+    --dry-run=client -o yaml | kubectl apply -f -
+done
+unset KC_SECRET AUTH_SECRET_DEV AUTH_SECRET_PROD AUTH
+```
+
+`AUTH_SECRET` must be unique per env (rotating it invalidates all existing NextAuth sessions in that env). `KEYCLOAK_CLIENT_SECRET` is shared with `report-ms`, so use the same value you put in `report-ms-secrets`.
+
 ### If you applied `root-app` before the credential existed
 
 The Application gets stuck on `Unknown / Healthy` waiting on Git auth. After creating the Secret, force an immediate reconcile instead of waiting on the 3-min poll:
@@ -372,14 +402,17 @@ kubectl -n argocd annotate application root \
 # All Applications should be Synced + Healthy within a few minutes
 kubectl -n argocd get applications
 
-# Expect (19 Applications total):
+# Expect (26 Applications total):
 #   root
-#   argocd, istio-base, istiod, istio-gateway, argocd-routing
+#   argocd, istio-base, istiod, istio-gateway, routing, argocd-routing
 #   kube-prometheus-stack, kiali
 #   apps-project, cloudnative-pg
 #   postgres-aura-{dev,staging,prod}
 #   postgres-keycloak-{dev,staging,prod}
 #   postgres-spicedb-{dev,staging,prod}
+#   keycloak-{dev,prod}
+#   report-ms-{dev,prod}
+#   aura-report-website-{dev,prod}
 ```
 
 Smoke-test self-management: change `core/argocd/values.yaml`, commit, push. The `argocd` Application drifts to OutOfSync then self-heals within ~3 min (or instantly with a Git webhook).

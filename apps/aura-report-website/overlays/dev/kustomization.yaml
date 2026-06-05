@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - virtualservice.yaml
+namespace: apps-dev
+
+patches:
+  # Per-env URLs. All public hostnames — browsers redirect/fetch through them.
+  - target:
+      kind: ConfigMap
+      name: bff-config
+    patch: |
+      - op: add
+        path: /data/NEXTAUTH_URL
+        value: "http://app-dev.lab.lan"
+      - op: add
+        path: /data/KEYCLOAK_ISSUER
+        value: "http://accounts-dev.lab.lan/realms/aura"
+      - op: add
+        path: /data/NEXT_PUBLIC_REPORT_SERVICE_URL
+        value: "http://api-dev.lab.lan"

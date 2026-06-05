@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aura-report-website
+  labels:
+    app: aura-report-website
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aura-report-website
+  template:
+    metadata:
+      labels:
+        app: aura-report-website
+    spec:
+      imagePullSecrets:
+        - name: ecr-pull
+      containers:
+        - name: aura-report-website
+          image: 696085047789.dkr.ecr.ap-southeast-1.amazonaws.com/aura:aura-report-website
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            # Non-sensitive constants (KEYCLOAK_CLIENT_ID, NODE_ENV). Per-env
+            # URLs (NEXTAUTH_URL, KEYCLOAK_ISSUER, NEXT_PUBLIC_REPORT_SERVICE_URL)
+            # are patched into this ConfigMap from the overlay.
+            - configMapRef:
+                name: bff-config
+            # AUTH_SECRET, KEYCLOAK_CLIENT_SECRET — created imperatively per env.
+            # Until SOPS+age lands.
+            - secretRef:
+                name: bff-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 100Mi
+            limits:
+              cpu: 300m
+              memory: 400Mi
+          # Next.js standalone listens on :3000 immediately but doesn't expose
+          # a dedicated health endpoint. TCP readiness is the practical option.
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 5

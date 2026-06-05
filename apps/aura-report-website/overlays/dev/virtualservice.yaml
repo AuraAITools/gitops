@@ -1,0 +1,15 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: aura-report-website
+spec:
+  hosts:
+    - app-dev.lab.lan
+  gateways:
+    - istio-ingress/public-gateway
+  http:
+    - route:
+        - destination:
+            host: aura-report-website.apps-dev.svc.cluster.local
+            port:
+              number: 3000

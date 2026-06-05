@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - virtualservice.yaml
+namespace: apps-prod
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: bff-config
+    patch: |
+      - op: add
+        path: /data/NEXTAUTH_URL
+        value: "http://app.lab.lan"
+      - op: add
+        path: /data/KEYCLOAK_ISSUER
+        value: "http://accounts.lab.lan/realms/aura"
+      - op: add
+        path: /data/NEXT_PUBLIC_REPORT_SERVICE_URL
+        value: "http://api.lab.lan"
+  - target:
+      kind: Deployment
+      name: aura-report-website
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+# TODO: bump replicas + tighten resource limits once we have actual prod load shape.

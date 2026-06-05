@@ -1,0 +1,12 @@
+# Non-sensitive constants. Per-env URLs (NEXTAUTH_URL, KEYCLOAK_ISSUER,
+# NEXT_PUBLIC_REPORT_SERVICE_URL) are added by the overlay because they
+# embed the env-specific lab.lan hostname — and in the case of the OIDC
+# issuer, browsers redirect there directly, so the *public* hostname is
+# what has to land here (not a cluster-DNS URL like report-ms uses).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bff-config
+data:
+  KEYCLOAK_CLIENT_ID: "aura-application-client"
+  NODE_ENV: "production"
