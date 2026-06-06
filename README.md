@@ -9,6 +9,7 @@ GitOps config repo for AuraAITools. ArgoCD reconciles every cluster from this re
 | **ArgoCD**  | http://argocd.lab.lan    | `kubectl -n argocd port-forward svc/argocd-server 8080:80` → http://localhost:8080   | Applications, sync status, sync history, drift, manual sync.                   |
 | **Grafana** | http://grafana.lab.lan ⏳ | `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80` → http://localhost:3000 | Cluster + node metrics out of the box. Istio's canonical dashboards (Mesh / Service / Workload / Performance / Control Plane / Extension) appear under the **Istio** folder — pulled from `istio/istio@release-1.30` at helm-template time. |
 | **Kiali**   | http://kiali.lab.lan ⏳   | `kubectl -n kiali port-forward svc/kiali 20001:20001` → http://localhost:20001       | Service mesh topology, traffic graph, per-service request rate / error rate.   |
+| **Vault**   | http://vault.lab.lan      | `kubectl -n vault port-forward svc/vault 8200:8200` → http://localhost:8200          | KV secret store; auth methods; policies. See **Managing secrets**.             |
 
 ⏳ = `VirtualService` not yet committed; see [Backlog](#backlog).
 
@@ -16,6 +17,7 @@ GitOps config repo for AuraAITools. ArgoCD reconciles every cluster from this re
 - ArgoCD: `admin` / `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`
 - Grafana: `admin` / `admin` (set in `core/monitoring/values.yaml`)
 - Kiali: anonymous (homelab only — change `auth.strategy` before any shared env)
+- Vault: **root token** from first-time `vault operator init` — see **Managing secrets** below for the one-time unseal/init runbook
 
 ## Application endpoints
 
@@ -116,6 +118,8 @@ bootstrap/
     ├── argocd-routing.yaml          # argocd.lab.lan VirtualService (sync-wave 3)
     ├── kube-prometheus-stack.yaml   # Prom + Grafana + Alertmgr     (sync-wave 4)
     ├── kiali.yaml                   # mesh topology dashboard       (sync-wave 5)
+    ├── vault.yaml                   # HashiCorp Vault (KV store)    (sync-wave 5)
+    ├── vault-routing.yaml           # vault.lab.lan VirtualService  (sync-wave 5)
     ├── apps-project.yaml            # AppProject + apps-{dev,staging,prod} ns (wave 6)
     ├── cloudnative-pg.yaml          # CNPG operator                 (sync-wave 6)
     ├── ecr-rotator.yaml             # ECR pull-cred CronJob         (sync-wave 6)
@@ -134,6 +138,7 @@ core/                                # values / overlays for platform components
 ├── istio/{istiod,gateway}-values.yaml
 ├── monitoring/values.yaml           # kube-prometheus-stack
 ├── kiali/values.yaml
+├── vault/                           # Helm values + VirtualService for vault.lab.lan
 ├── apps-project/                    # AppProject `apps` + 3 env namespaces
 ├── cloudnative-pg/values.yaml
 └── ecr-rotator/                     # CronJob + RBAC; refreshes ecr-pull Secret in apps-* every 8h
@@ -167,6 +172,7 @@ apps/                                # application workloads (DRY tree, hydrated
 | kube-prometheus-stack   | `86.1.0` | Prometheus Operator `v0.91.0`                      |
 | Kiali                   | `2.27.0` | Helm chart `kiali/kiali-server`                    |
 | CloudNativePG operator  | `0.28.2` | operator `v1.29.1` — manages all 3 env Postgres    |
+| HashiCorp Vault         | `1.18.0` | chart `0.29.1`; single-node Raft + Shamir seal     |
 
 Bump deliberately, never track `latest`.
 
@@ -193,7 +199,7 @@ Waves in this repo:
 | `2`  | `istio-gateway`  | Gateway pods need sidecars injected by `istiod`, so this can't race ahead.                      |
 | `3`  | `routing`, `argocd-routing` | Shared `public-gateway` (hosts `*.lab.lan`) + argocd's `VirtualService`. Every other service attaches a VirtualService later — no per-app Gateway needed. |
 | `4`  | `kube-prometheus-stack` | Prometheus + Grafana + Alertmanager + node-exporter + kube-state-metrics. No hard dep on Istio at sync time, but scrapes envoy sidecars and istiod once they're up. |
-| `5`  | `kiali`          | Service mesh dashboard. Reads from the Prometheus that wave 4 just installed. |
+| `5`  | `kiali`, `vault`, `vault-routing` | Service mesh dashboard; HashiCorp Vault (single-node Raft, manual Shamir unseal); Vault `VirtualService`. No deps between them — all install in parallel. |
 | `6`  | `apps-project`, `cloudnative-pg`, `ecr-rotator` | AppProject `apps` + 3 env namespaces, CNPG operator, and the ECR pull-cred rotator. All three install in parallel. Workloads in wave 7+ depend on namespaces + CNPG + `ecr-pull` Secret. |
 | `7`  | `postgres-{aura,keycloak,spicedb}-{dev,staging,prod}` | Nine `Cluster` CRs — 3 databases × 3 envs. Each materialized via Source Hydrator from `apps/postgres-<db>/overlays/<env>` → `environments/<env>` branches. |
 | `8`  | `keycloak-{dev,prod}` | IdP — needs `postgres-keycloak` (wave 7). |
@@ -260,7 +266,7 @@ helm install argocd argo/argo-cd --namespace argocd --version 9.5.17 --values ~/
 # 5. Register the private-repo credential (skip if the repo is public).
 #    Chicken-and-egg: ArgoCD can't fetch the repo until this Secret exists,
 #    so it has to be created imperatively here. Move it under SOPS later.
-read -s -p "PAT: " PAT && echo
+printf 'PAT: '; read -s PAT; echo
 kubectl -n argocd create secret generic aura-gitops-repo \
   --from-literal=type=git \
   --from-literal=url=https://github.com/AuraAITools/gitops.git \
@@ -295,7 +301,7 @@ The argocd values commit turns on `commitServer.enabled: true` and `hydrator.ena
 #    (Same repo selection as the existing read PAT.)
 
 # 2. Register it as a write secret (distinct from the existing read secret).
-read -s -p "WRITE PAT: " PAT && echo
+printf 'WRITE PAT: '; read -s PAT; echo
 kubectl -n argocd create secret generic aura-gitops-repo-write \
   --from-literal=type=git \
   --from-literal=url=https://github.com/AuraAITools/gitops.git \
@@ -353,8 +359,8 @@ Create an access key for this user (Security credentials → Create access key �
 **2. Drop the access key into the `aws-credentials` Secret** (one-shot, lives only on the cluster — not in git):
 
 ```bash
-read -p "AWS_ACCESS_KEY_ID: " AWS_AK
-read -s -p "AWS_SECRET_ACCESS_KEY: " AWS_SK && echo
+printf 'AWS_ACCESS_KEY_ID: '; read AWS_AK
+printf 'AWS_SECRET_ACCESS_KEY: '; read -s AWS_SK; echo
 kubectl -n ecr-rotator create secret generic aws-credentials \
   --from-literal=AWS_ACCESS_KEY_ID="$AWS_AK" \
   --from-literal=AWS_SECRET_ACCESS_KEY="$AWS_SK" \
@@ -415,7 +421,7 @@ AUTH_SECRET_PROD="$(openssl rand -base64 32)"
 
 # Keycloak client secret — same `aura-application-client` as report-ms.
 # Grab it from Keycloak admin: Clients → aura-application-client → Credentials.
-read -s -p "KEYCLOAK_CLIENT_SECRET: " KC_SECRET && echo
+printf 'KEYCLOAK_CLIENT_SECRET: '; read -s KC_SECRET; echo
 
 for ns in apps-dev apps-prod; do
   AUTH="$( [ "$ns" = apps-dev ] && echo "$AUTH_SECRET_DEV" || echo "$AUTH_SECRET_PROD" )"
@@ -444,10 +450,11 @@ kubectl -n argocd annotate application root \
 # All Applications should be Synced + Healthy within a few minutes
 kubectl -n argocd get applications
 
-# Expect (27 Applications total):
+# Expect (29 Applications total):
 #   root
 #   argocd, istio-base, istiod, istio-gateway, routing, argocd-routing
 #   kube-prometheus-stack, kiali
+#   vault, vault-routing
 #   apps-project, cloudnative-pg, ecr-rotator
 #   postgres-aura-{dev,staging,prod}
 #   postgres-keycloak-{dev,staging,prod}
@@ -528,6 +535,99 @@ kubectl -n kiali port-forward svc/kiali 20001:20001
 
 Adding `grafana.lab.lan` and `kiali.lab.lan` `VirtualService`s is a follow-up — see Backlog.
 
+## Managing secrets
+
+Application secrets live in **HashiCorp Vault**, self-hosted in-cluster (`core/vault/`). The Vault Secrets Operator (VSO) — coming in a follow-up commit — watches `VaultStaticSecret` CRDs in each `apps-<env>` namespace and materializes normal `Secret` resources, which pods consume via `envFrom`. Until VSO + per-app migration land, the existing imperative `kubectl create secret` blocks still apply.
+
+```
+You:    vault kv put aura/dev/report-ms KEYCLOAK_CLIENT_SECRET=... MAIL_PASSWORD=...
+        # via UI at http://vault.lab.lan, or `vault` CLI port-forwarded
+
+Vault:  encrypted at rest on /vault/data (Raft storage), sealed/unsealed via
+        Shamir's secret sharing (5 keys, 3 needed to unseal)
+
+VSO:    watches a VaultStaticSecret CRD in apps-<env>; reads Vault as the
+        per-app ServiceAccount via the Kubernetes auth method; writes a normal
+        Secret into the namespace; re-syncs every 60s so `vault kv put` updates
+        propagate without a redeploy
+
+App:    consumes the Secret via envFrom — identical Deployment YAML to today
+```
+
+### Why Vault (and not SOPS / sealed-secrets / ESO)
+
+- **Learning**: industry-standard tool; same patterns at scale apply at this scale.
+- **No external deps**: self-hosted, no cloud KMS, no Docker Hub for the secret store itself.
+- **Rotation is `vault kv put`** — no commit, no PR, no deploy. SOPS would need a re-encrypt + commit per rotation.
+- **Dynamic secrets later**: PG dynamic credentials, short-lived AWS STS tokens — Vault's headline feature, available when we want it. Backlog.
+
+What's lost vs. SOPS: Vault is one more service to operate. The unseal step is real (see below). For 3–5 secrets, SOPS would be lower-effort; we picked Vault as the explicit long-term move.
+
+### Architecture choices
+
+| Decision | Pick | Why |
+| :--- | :--- | :--- |
+| Storage backend | Raft (integrated) | No external KV; HashiCorp-recommended since 1.4 |
+| Replicas | 1 | Single-node sufficient for homelab. Bump to 3 for HA when needed |
+| Seal type | Shamir (default, manual unseal) | No external KMS dep. Trade-off: every Vault pod restart needs manual unseal |
+| K8s integration | Vault Secrets Operator (VSO) | Official, modern. Produces normal `Secret` resources |
+| Auth method | Kubernetes auth | Pods present their SA token; no per-app bootstrap secret |
+
+### One-time bootstrap (after Vault Application syncs Healthy)
+
+The Vault pod starts **sealed**. You need to initialize and unseal it once.
+
+```bash
+# 1. Initialize Vault — generates 5 unseal keys + 1 root token.
+#    Save the entire output to your password manager. Losing all 5 unseal
+#    keys means losing every secret Vault holds.
+kubectl -n vault exec -it vault-0 -- vault operator init
+
+# Output looks like:
+#   Unseal Key 1: <base64>
+#   Unseal Key 2: ...
+#   Unseal Key 3: ...
+#   Unseal Key 4: ...
+#   Unseal Key 5: ...
+#   Initial Root Token: hvs.<long-string>
+
+# 2. Unseal — provide 3 of the 5 keys.
+kubectl -n vault exec -it vault-0 -- vault operator unseal   # paste key 1
+kubectl -n vault exec -it vault-0 -- vault operator unseal   # paste key 2
+kubectl -n vault exec -it vault-0 -- vault operator unseal   # paste key 3
+# Status flips to "Sealed: false"
+
+# 3. Verify
+kubectl -n vault exec -it vault-0 -- vault status
+```
+
+After this you can log in to the UI at `http://vault.lab.lan` (DNS entry required — see DNS setup above) with the root token. **Rotate the root token to a short-lived token via the UI's "Generate Root" flow once you've configured proper auth methods.** The bootstrap root token grants everything; only use it for initial setup.
+
+### Pod restart unseal (the cost of no auto-unseal)
+
+Every time `vault-0` restarts (cluster reboot, image bump, eviction), Vault re-seals automatically. You bring it back with the same 3-keys unseal flow — typically ~20 seconds of work, but you'll know about it because anything depending on Vault stops getting fresh secrets.
+
+For a homelab on a Mac mini, this is acceptable. If it becomes painful, the fallback is **storing the unseal keys in a K8s Secret + an init container that auto-unseals on startup** — defeats most of the seal guarantee but reasonable on a single-node cluster with physical security. We'll add that pattern if needed; not yet.
+
+### Bootstrap that stays imperative
+
+- The 5 unseal keys + root token (kept in your password manager — by design, can't be in git).
+- The per-environment Vault auth setup (Kubernetes auth method, policies, roles) — done with `vault` CLI or Terraform once. Comes in commit 2 of the Vault rollout.
+
+Everything else lands via GitOps.
+
+### Where things will live (once VSO is wired in)
+
+```
+core/vault/                            # Helm install + UI VirtualService
+core/vault-secrets-operator/           # VSO Helm install + cluster-level config (commit 2)
+apps/<svc>/overlays/<env>/
+  secrets.vault.yaml                   # VaultStaticSecret CRD; references aura/<env>/<svc> path
+```
+
+Today: 3 imperative Secrets (`report-ms-secrets`, `bff-secrets`, `keycloak-admin-secret`).
+After full Vault rollout: 0 imperative Secrets in the apps-* namespaces. Two remain: the `aws-credentials` Secret for the ECR rotator, and the Vault unseal keys (in your password manager, not the cluster).
+
 ## Re-bootstrap (cluster blown away)
 
 The bootstrap is idempotent. Re-run steps 3 → 6 above against a fresh cluster. The `argocd` Application is annotated `sync-wave: -10` so it reconciles before everything else.
@@ -535,7 +635,10 @@ The bootstrap is idempotent. Re-run steps 3 → 6 above against a fresh cluster.
 ## Backlog
 
 - [x] ~~**ECR pull-credential rotator**~~ — landed at `core/ecr-rotator/`. Single CronJob in `ecr-rotator` ns, ServiceAccount with per-namespace `Role`+`RoleBinding` in each `apps-<env>`, runs every 8h. Bootstrap = one imperative `aws-credentials` Secret + one `kubectl create job --from=cronjob/...`.
-- [ ] **Secrets management — SOPS + age.** Per the strategy doc, Sealed Secrets is an anti-pattern for this setup (single controller-key fragility, per-cluster ciphertext, manual DR). The chosen direction is SOPS + age with a KSOPS sidecar in `argocd-repo-server`. Removes the imperative PAT bootstrap and lets app secrets live encrypted in Git.
+- [ ] **Vault Secrets Operator (VSO) + per-app migration** — commit 2 of the Vault rollout: install VSO at `core/vault-secrets-operator/`, configure Kubernetes auth method, then migrate `report-ms-secrets` / `bff-secrets` / `keycloak-admin-secret` to `VaultStaticSecret` CRDs.
+- [ ] **Vault auto-unseal (pragmatic homelab pattern)** — only if manual unseal becomes painful. Likely shape: init container reads unseal keys from a K8s Secret on startup and calls `vault operator unseal`. Weakens the seal guarantee but acceptable on a single-node cluster.
+- [ ] **Dynamic Vault secrets (Postgres + AWS STS)** — Vault's headline feature. Use the `database` engine to issue short-lived PG credentials per app, and the `aws` engine to mint STS tokens for the ECR rotator (replacing the static AWS access key). Far enough out that we don't need to plan it now.
+- [x] ~~**Secrets management strategy**~~ — chose Vault over SOPS+age for the long-term path. See [Managing secrets](#managing-secrets). Vault server lands at sync-wave 5; VSO + per-app migration are follow-up commits.
 - [ ] **cert-manager** for TLS at `*.lab.lan`. Options: self-signed CA via the cert-manager bootstrap Issuer (zero external deps, browser warnings) or Let's Encrypt via DNS-01 if the lab domain ever becomes routable. Currently all routing is plain HTTP, which is OK on the LAN only.
 - [ ] **Istio routing for Grafana + Kiali** — `grafana.lab.lan` / `kiali.lab.lan` VirtualServices attaching to the shared `public-gateway`.
 - [x] ~~**`public-gateway` refactor**~~ — landed. One Gateway in `istio-ingress` listens on `*.lab.lan`; per-service `VirtualService` lives with the app. Adding a new public host is now a single-resource change.

@@ -1,0 +1,72 @@
+global:
+  enabled: true
+  # Plain HTTP at the Vault listener; the eventual *.lab.lan TLS gateway
+  # (cert-manager backlog) terminates externally. In-mesh hop is plaintext
+  # for the homelab. Flip when STRICT mTLS lands.
+  tlsDisable: true
+
+# Vault Agent Injector is the older sidecar-injection pattern. We use the
+# newer Vault Secrets Operator (VSO) instead — comes in a later commit.
+injector:
+  enabled: false
+
+server:
+  image:
+    repository: hashicorp/vault
+    tag: "1.18.0"
+
+  # Single-node Raft. The `ha.enabled: true` + `replicas: 1` combo gives us
+  # Raft storage (integrated, no external KV) without actually running HA.
+  # Bump replicas to 3 when availability matters; Raft will quorum naturally.
+  ha:
+    enabled: true
+    replicas: 1
+    raft:
+      enabled: true
+      setNodeId: true
+      # Inline Vault server config. UI on, plain HTTP, Raft storage at /vault/data,
+      # Kubernetes service registration so the chart's Services route to whoever
+      # is currently active.
+      config: |
+        ui = true
+        listener "tcp" {
+          tls_disable = 1
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+        }
+        storage "raft" {
+          path = "/vault/data"
+        }
+        service_registration "kubernetes" {}
+
+  # Persistent volume for Raft data. local-path is k3d's default StorageClass.
+  dataStorage:
+    enabled: true
+    size: 5Gi
+    storageClass: local-path
+    accessMode: ReadWriteOnce
+
+  # No Istio sidecar — Vault has its own cluster TLS layer and the agent +
+  # `vault` CLI get confused by double-mTLS. Internal Raft + service-registration
+  # traffic stays plaintext within the vault namespace.
+  annotations:
+    sidecar.istio.io/inject: "false"
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  readinessProbe:
+    enabled: true
+    # Vault is "ready" only once unsealed; we tolerate Sealed during init.
+    path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+
+# Built-in UI — accessible at vault.lab.lan via the VirtualService in
+# core/vault/routing/. Log in with the root token after `vault operator init`.
+ui:
+  enabled: true
+  serviceType: ClusterIP

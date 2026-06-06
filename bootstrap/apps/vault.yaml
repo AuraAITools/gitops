@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+  annotations:
+    # Wave 5 — alongside kiali. No deps on cnpg/apps-project/ecr-rotator; needs
+    # to be Healthy before VSO (next commit) and before any secret-consuming
+    # workload (keycloak, report-ms, BFF starting at wave 8).
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: default
+  sources:
+    - repoURL: https://helm.releases.hashicorp.com
+      chart: vault
+      targetRevision: 0.29.1
+      helm:
+        releaseName: vault
+        valueFiles:
+          - $values/core/vault/values.yaml
+    - repoURL: https://github.com/AuraAITools/gitops.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

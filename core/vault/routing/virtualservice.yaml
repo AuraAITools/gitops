@@ -1,0 +1,16 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  hosts:
+    - vault.lab.lan
+  gateways:
+    - istio-ingress/public-gateway
+  http:
+    - route:
+        - destination:
+            host: vault.vault.svc.cluster.local
+            port:
+              number: 8200
