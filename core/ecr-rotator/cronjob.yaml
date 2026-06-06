@@ -1,0 +1,93 @@
+# Refreshes the `ecr-pull` docker-registry Secret in apps-{dev,staging,prod}.
+# ECR auth tokens last 12h; cron at 8h gives a 4h grace window before expiry.
+#
+# Two containers (init + main) because no public image bundles aws-cli + kubectl:
+#   - initContainer (amazon/aws-cli): mints the token, writes to a shared
+#     emptyDir.
+#   - main container (bitnami/kubectl): reads the token, builds a
+#     docker-registry Secret manifest with kubectl --dry-run, applies it in
+#     each target namespace.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ecr-pull-rotator
+  namespace: ecr-rotator
+spec:
+  schedule: "0 */8 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          serviceAccountName: ecr-rotator
+          restartPolicy: OnFailure
+          volumes:
+            - name: token
+              emptyDir: {}
+          initContainers:
+            - name: get-token
+              image: amazon/aws-cli:2.18.0
+              env:
+                - name: AWS_REGION
+                  value: "ap-southeast-1"
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: aws-credentials
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: aws-credentials
+                      key: AWS_SECRET_ACCESS_KEY
+              command:
+                - sh
+                - -c
+                - |
+                  set -euo pipefail
+                  aws ecr get-login-password --region "$AWS_REGION" > /shared/token
+                  echo "token-bytes=$(wc -c < /shared/token)"
+              volumeMounts:
+                - name: token
+                  mountPath: /shared
+          containers:
+            - name: write-secret
+              image: bitnami/kubectl:1.31.0
+              env:
+                - name: AWS_REGION
+                  value: "ap-southeast-1"
+                - name: AWS_ACCOUNT_ID
+                  value: "696085047789"
+                - name: TARGET_NAMESPACES
+                  value: "apps-dev apps-staging apps-prod"
+              command:
+                - sh
+                - -c
+                - |
+                  set -euo pipefail
+                  TOKEN="$(cat /shared/token)"
+                  SERVER="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                  for ns in $TARGET_NAMESPACES; do
+                    echo "==> $ns"
+                    kubectl -n "$ns" create secret docker-registry ecr-pull \
+                      --docker-server="$SERVER" \
+                      --docker-username=AWS \
+                      --docker-password="$TOKEN" \
+                      --dry-run=client -o yaml | kubectl apply -f -
+                  done
+              volumeMounts:
+                - name: token
+                  mountPath: /shared
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi

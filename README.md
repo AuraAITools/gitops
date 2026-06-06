@@ -118,6 +118,7 @@ bootstrap/
     ├── kiali.yaml                   # mesh topology dashboard       (sync-wave 5)
     ├── apps-project.yaml            # AppProject + apps-{dev,staging,prod} ns (wave 6)
     ├── cloudnative-pg.yaml          # CNPG operator                 (sync-wave 6)
+    ├── ecr-rotator.yaml             # ECR pull-cred CronJob         (sync-wave 6)
     ├── postgres-<db>-<env>.yaml     # 3 databases × 3 envs = 9 Apps (sync-wave 7)
     │                                # db ∈ {aura, keycloak, spicedb}
     │                                # env ∈ {dev, staging, prod}
@@ -134,7 +135,8 @@ core/                                # values / overlays for platform components
 ├── monitoring/values.yaml           # kube-prometheus-stack
 ├── kiali/values.yaml
 ├── apps-project/                    # AppProject `apps` + 3 env namespaces
-└── cloudnative-pg/values.yaml
+├── cloudnative-pg/values.yaml
+└── ecr-rotator/                     # CronJob + RBAC; refreshes ecr-pull Secret in apps-* every 8h
 apps/                                # application workloads (DRY tree, hydrated by Source Hydrator)
 ├── postgres-aura/                   # main application DB
 │   ├── base/                        # CNPG Cluster CR — name: postgres-aura, db: aura
@@ -192,7 +194,7 @@ Waves in this repo:
 | `3`  | `routing`, `argocd-routing` | Shared `public-gateway` (hosts `*.lab.lan`) + argocd's `VirtualService`. Every other service attaches a VirtualService later — no per-app Gateway needed. |
 | `4`  | `kube-prometheus-stack` | Prometheus + Grafana + Alertmanager + node-exporter + kube-state-metrics. No hard dep on Istio at sync time, but scrapes envoy sidecars and istiod once they're up. |
 | `5`  | `kiali`          | Service mesh dashboard. Reads from the Prometheus that wave 4 just installed. |
-| `6`  | `apps-project`, `cloudnative-pg` | AppProject `apps` + 3 env namespaces (`apps-{dev,staging,prod}`) and the CNPG operator install in parallel. App workloads in wave 7 need both. |
+| `6`  | `apps-project`, `cloudnative-pg`, `ecr-rotator` | AppProject `apps` + 3 env namespaces, CNPG operator, and the ECR pull-cred rotator. All three install in parallel. Workloads in wave 7+ depend on namespaces + CNPG + `ecr-pull` Secret. |
 | `7`  | `postgres-{aura,keycloak,spicedb}-{dev,staging,prod}` | Nine `Cluster` CRs — 3 databases × 3 envs. Each materialized via Source Hydrator from `apps/postgres-<db>/overlays/<env>` → `environments/<env>` branches. |
 | `8`  | `keycloak-{dev,prod}` | IdP — needs `postgres-keycloak` (wave 7). |
 | `9`  | `report-ms-{dev,prod}` | Java backend — needs `postgres-aura` (wave 7) for JDBC + Keycloak (wave 8) for OIDC. Reaches SpiceDB at `spicedb:50051` when that lands. |
@@ -317,29 +319,69 @@ git checkout main
 
 The pull secret (`aura-gitops-repo`, label `repository`) and the push secret (`aura-gitops-repo-write`, label `repository-write`) are deliberately separate — ArgoCD treats them as two different credentials so a leaked read PAT can't write.
 
-### Imperative Secrets for `report-ms` (per env, until SOPS+age lands)
+### ECR pull-credential rotator (one-time bootstrap)
 
-`report-ms` pulls from private ECR and consumes a bag of credentials. Until SOPS ships, both Secrets are created imperatively per env. The Deployment references them by name (`ecr-pull`, `report-ms-secrets`) — without them, pods sit in `ImagePullBackOff` or `CreateContainerConfigError`.
+The `ecr-rotator` Application installs a `CronJob` in the `ecr-rotator` namespace that runs every 8 hours, calls `aws ecr get-login-password`, and overwrites the `ecr-pull` Secret in `apps-{dev,staging,prod}`. ECR tokens expire after 12h, so the 8h schedule gives a 4h grace window.
 
-**1. ECR pull secret** (`ecr-pull`) — needs to land in every `apps-<env>` namespace. ECR tokens expire after 12 hours, so production wants the CronJob rotator from `AURA_STACK_DEPLOYMENT.md` §6.1; for first-light dev work, the one-shot below is enough:
+One imperative step — the AWS credentials Secret. Everything else is GitOps.
 
-```bash
-AWS_REGION=ap-southeast-1
-AWS_ACCT=696085047789
-for ns in apps-dev apps-prod; do
-  TOKEN="$(aws ecr get-login-password --region "$AWS_REGION")"
-  kubectl -n "$ns" create secret docker-registry ecr-pull \
-    --docker-server="${AWS_ACCT}.dkr.ecr.${AWS_REGION}.amazonaws.com" \
-    --docker-username=AWS \
-    --docker-password="$TOKEN" \
-    --dry-run=client -o yaml | kubectl apply -f -
-done
-unset TOKEN
+**1. Create a minimal-permissions IAM user for the rotator.** In the AWS console (or via CLI), create a new IAM user `aura-ecr-rotator` with an inline policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ],
+      "Resource": "arn:aws:ecr:ap-southeast-1:696085047789:repository/aura"
+    }
+  ]
+}
 ```
 
-Re-run before the 12h ECR token expires, or set up the CronJob rotator. (Backlog item.)
+Create an access key for this user (Security credentials → Create access key → Application running outside AWS). Copy the access key + secret.
 
-**2. `report-ms-secrets`** — sensitive env vars consumed via `envFrom: secretRef`. Replace the placeholder values with real ones before running:
+**2. Drop the access key into the `aws-credentials` Secret** (one-shot, lives only on the cluster — not in git):
+
+```bash
+read -p "AWS_ACCESS_KEY_ID: " AWS_AK
+read -s -p "AWS_SECRET_ACCESS_KEY: " AWS_SK && echo
+kubectl -n ecr-rotator create secret generic aws-credentials \
+  --from-literal=AWS_ACCESS_KEY_ID="$AWS_AK" \
+  --from-literal=AWS_SECRET_ACCESS_KEY="$AWS_SK" \
+  --dry-run=client -o yaml | kubectl apply -f -
+unset AWS_AK AWS_SK
+```
+
+(The `ecr-rotator` namespace is created by the Application at sync-wave 6; if you're running this before that synced, `kubectl create ns ecr-rotator` first.)
+
+**3. Kick off the first run** so you don't wait up to 8h for the first scheduled execution:
+
+```bash
+kubectl -n ecr-rotator create job --from=cronjob/ecr-pull-rotator ecr-pull-bootstrap
+kubectl -n ecr-rotator logs -f job/ecr-pull-bootstrap
+```
+
+You should see `token-bytes=<some number>` then three `secret/ecr-pull configured` lines (one per env namespace). Confirm:
+
+```bash
+kubectl get secret ecr-pull -n apps-dev -n apps-prod -n apps-staging --ignore-not-found
+```
+
+After that, any `ImagePullBackOff` pods will pick up the Secret on the next pull retry — or force it with `kubectl rollout restart deploy/<name> -n <ns>`.
+
+### Imperative Secrets for `report-ms` (per env, until SOPS+age lands)
+
+`report-ms-secrets` — sensitive env vars consumed via `envFrom: secretRef`. Replace the placeholder values with real ones before running:
 
 ```bash
 for ns in apps-dev apps-prod; do
@@ -402,11 +444,11 @@ kubectl -n argocd annotate application root \
 # All Applications should be Synced + Healthy within a few minutes
 kubectl -n argocd get applications
 
-# Expect (26 Applications total):
+# Expect (27 Applications total):
 #   root
 #   argocd, istio-base, istiod, istio-gateway, routing, argocd-routing
 #   kube-prometheus-stack, kiali
-#   apps-project, cloudnative-pg
+#   apps-project, cloudnative-pg, ecr-rotator
 #   postgres-aura-{dev,staging,prod}
 #   postgres-keycloak-{dev,staging,prod}
 #   postgres-spicedb-{dev,staging,prod}
@@ -492,7 +534,7 @@ The bootstrap is idempotent. Re-run steps 3 → 6 above against a fresh cluster.
 
 ## Backlog
 
-- [ ] **ECR pull-credential rotator** — CronJob in each `apps-<env>` ns that re-runs `aws ecr get-login-password` every 8h and overwrites the `ecr-pull` Secret. Until this lands, the one-shot `kubectl create secret docker-registry` above has a 12-hour expiry window. See `AURA_STACK_DEPLOYMENT.md` §6.1.
+- [x] ~~**ECR pull-credential rotator**~~ — landed at `core/ecr-rotator/`. Single CronJob in `ecr-rotator` ns, ServiceAccount with per-namespace `Role`+`RoleBinding` in each `apps-<env>`, runs every 8h. Bootstrap = one imperative `aws-credentials` Secret + one `kubectl create job --from=cronjob/...`.
 - [ ] **Secrets management — SOPS + age.** Per the strategy doc, Sealed Secrets is an anti-pattern for this setup (single controller-key fragility, per-cluster ciphertext, manual DR). The chosen direction is SOPS + age with a KSOPS sidecar in `argocd-repo-server`. Removes the imperative PAT bootstrap and lets app secrets live encrypted in Git.
 - [ ] **cert-manager** for TLS at `*.lab.lan`. Options: self-signed CA via the cert-manager bootstrap Issuer (zero external deps, browser warnings) or Let's Encrypt via DNS-01 if the lab domain ever becomes routable. Currently all routing is plain HTTP, which is OK on the LAN only.
 - [ ] **Istio routing for Grafana + Kiali** — `grafana.lab.lan` / `kiali.lab.lan` VirtualServices attaching to the shared `public-gateway`.

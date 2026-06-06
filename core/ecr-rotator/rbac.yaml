@@ -1,0 +1,76 @@
+# Per-namespace Role + RoleBinding — each target app namespace explicitly
+# permits the ecr-rotator ServiceAccount to write its own ecr-pull Secret.
+# No ClusterRole means a misconfigured RoleBinding can't accidentally grant
+# Secret access elsewhere in the cluster.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ecr-pull-writer
+  namespace: apps-dev
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ecr-rotator
+  namespace: apps-dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ecr-pull-writer
+subjects:
+  - kind: ServiceAccount
+    name: ecr-rotator
+    namespace: ecr-rotator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ecr-pull-writer
+  namespace: apps-staging
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ecr-rotator
+  namespace: apps-staging
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ecr-pull-writer
+subjects:
+  - kind: ServiceAccount
+    name: ecr-rotator
+    namespace: ecr-rotator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ecr-pull-writer
+  namespace: apps-prod
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ecr-rotator
+  namespace: apps-prod
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ecr-pull-writer
+subjects:
+  - kind: ServiceAccount
+    name: ecr-rotator
+    namespace: ecr-rotator

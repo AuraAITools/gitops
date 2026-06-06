@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ecr-rotator
+  labels:
+    # No istio sidecar — the only thing that runs here is a short-lived CronJob
+    # that calls AWS + the kube-apiserver; we don't want injection slowing it.
+    istio-injection: disabled

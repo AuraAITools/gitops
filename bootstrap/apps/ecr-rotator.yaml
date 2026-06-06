@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ecr-rotator
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+  annotations:
+    # Wave 6 — same as apps-project and cnpg. Needs to land before any pod
+    # that pulls from ECR (keycloak: wave 8; report-ms: 9; bff: 10).
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/AuraAITools/gitops.git
+    targetRevision: main
+    path: core/ecr-rotator
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ecr-rotator
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
