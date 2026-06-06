@@ -1,0 +1,13 @@
+# Cluster-default VaultConnection — every VaultStaticSecret/VaultAuth in the
+# cluster picks this up automatically unless they specify their own. Naming
+# it `default` and putting it in the VSO namespace is the documented pattern.
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultConnection
+metadata:
+  name: default
+  namespace: vault-secrets-operator-system
+spec:
+  # In-cluster URL; plain HTTP because tlsDisable=true is set in the Vault
+  # server config (homelab; gateway TLS termination is a cert-manager backlog
+  # item).
+  address: http://vault.vault.svc.cluster.local:8200

@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault-config
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+  annotations:
+    # Wave 6 — wait for VSO (wave 5) to install its CRDs before applying the
+    # VaultConnection. The auth-delegator SA only needs core RBAC.
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/AuraAITools/gitops.git
+    targetRevision: main
+    path: core/vault-config
+  destination:
+    server: https://kubernetes.default.svc
+    # The Application's resources span two namespaces (vault, vault-secrets-operator-system)
+    # via their `metadata.namespace` fields. ArgoCD honors those over destination.namespace.
+    namespace: vault
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
