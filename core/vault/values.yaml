@@ -39,11 +39,11 @@ server:
         }
         service_registration "kubernetes" {}
 
-  # Persistent volume for Raft data. local-path is k3d's default StorageClass.
+  # Persistent volume for Raft data. No explicit StorageClass — uses the
+  # cluster's default (same path CNPG takes for the Postgres PVCs).
   dataStorage:
     enabled: true
     size: 5Gi
-    storageClass: local-path
     accessMode: ReadWriteOnce
 
   # No Istio sidecar — Vault has its own cluster TLS layer and the agent +

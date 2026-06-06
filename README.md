@@ -40,7 +40,9 @@ Hosts shown with ⏳ are waiting on either the per-service `VirtualService` to l
 The shared Gateway listens on `*.lab.lan`, but `/etc/hosts` doesn't support wildcards — each hostname has to resolve to the gateway's external IP individually. Two options:
 
 ```bash
-# Find the gateway's external IP (with k3d on the Mac mini, this is usually 127.0.0.1)
+# Find the gateway's external IP. On kind without MetalLB it stays <pending>;
+# you'll route via NodePort or `kubectl port-forward` instead, OR install
+# cloud-provider-kind / MetalLB to get an actual external IP.
 kubectl -n istio-ingress get svc istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}'; echo
 ```
 
@@ -478,7 +480,9 @@ kubectl -n istio-ingress get svc istio-ingressgateway
 
 # Then on whichever machine you'll browse from, add to /etc/hosts:
 #   <gateway-ip>   argocd.lab.lan
-# For k3d on the Mac mini itself: 127.0.0.1   argocd.lab.lan
+# For kind on the Mac mini, depending on your kind config / cloud-provider-kind /
+# MetalLB setup, this is typically 127.0.0.1 (with extraPortMappings) or the
+# MetalLB-assigned IP from the configured pool.
 ```
 
 Verify end-to-end:
@@ -518,7 +522,7 @@ Three things make up the stack:
 
 What's disabled and why (in `core/monitoring/values.yaml`):
 
-- `kubeEtcd`, `kubeProxy`, `kubeControllerManager`, `kubeScheduler` — k3d/k3s replaces or hides these. Leaving them on just produces DOWN targets and noisy alerts.
+- `kubeEtcd`, `kubeProxy`, `kubeControllerManager`, `kubeScheduler` — kind doesn't expose the metrics endpoints for these on the host network the way the chart expects. Leaving them on just produces DOWN targets and noisy alerts.
 - `tracing.enabled: false` in Kiali — no Tempo / Jaeger installed yet.
 
 ### Access (until per-service routing is added)

@@ -98,8 +98,9 @@ alertmanager:
       limits:
         memory: 128Mi
 
-# k3d/k3s ships an embedded etcd and replaces kube-proxy with klipper —
-# scraping the chart's defaults would just give DOWN targets and noisy alerts.
+# kind doesn't expose etcd / kube-proxy / kcm / scheduler metrics on the host
+# network the way the chart expects. Scraping the defaults would just give
+# DOWN targets and noisy alerts.
 kubeEtcd:
   enabled: false
 kubeProxy:

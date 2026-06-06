@@ -204,8 +204,8 @@ All four custom images live on private ECR. Two viable patterns:
 | Pattern | Pros | Cons | Pick for homelab? |
 | :--- | :--- | :--- | :--- |
 | **Static `regcred` Secret rotated daily by CronJob** running `aws ecr get-login-password` | Simple, no IAM roles | 12-hour ECR token expiry; CronJob must run at < 12h interval. AWS keys in a Secret. | ✅ |
-| **IRSA / pod identity** | No static creds | Requires EKS or IAM Roles for Service Accounts — not available on k3d. | ❌ |
-| **ECR credential helper as kubelet image-credential-provider** | Per-node, no Secret | Node-level config; k3d agents are ephemeral. | ❌ |
+| **IRSA / pod identity** | No static creds | Requires EKS or IAM Roles for Service Accounts — not available on kind. | ❌ |
+| **ECR credential helper as kubelet image-credential-provider** | Per-node, no Secret | Node-level config; kind nodes are Docker containers that get rebuilt frequently. | ❌ |
 
 **Recommendation:** static Secret + CronJob that rotates every 8h. CronJob uses an IAM user with `ecr:GetAuthorizationToken` only.
 
