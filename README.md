@@ -172,7 +172,7 @@ apps/                                # application workloads (DRY tree, hydrated
 | kube-prometheus-stack   | `86.1.0` | Prometheus Operator `v0.91.0`                      |
 | Kiali                   | `2.27.0` | Helm chart `kiali/kiali-server`                    |
 | CloudNativePG operator  | `0.28.2` | operator `v1.29.1` — manages all 3 env Postgres    |
-| HashiCorp Vault         | `1.18.0` | chart `0.29.1`; single-node Raft + Shamir seal     |
+| HashiCorp Vault         | `1.18.0` | chart `0.31.0`; single-node Raft + Shamir seal     |
 
 Bump deliberately, never track `latest`.
 
