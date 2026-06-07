@@ -106,7 +106,7 @@ bootstrap/
     ├── kube-prometheus-stack.yaml   # Prom + Grafana + Alertmgr     (sync-wave 4)
     ├── kiali.yaml                   # mesh topology dashboard       (sync-wave 5)
     ├── vault.yaml                   # HashiCorp Vault (KV store)    (sync-wave 5)
-    ├── vault-routing.yaml           # vault.lab.lan VirtualService  (sync-wave 5)
+    ├── vault-routing.yaml           # vault VirtualService (port-forward only by default) (sync-wave 5)
     ├── vault-secrets-operator.yaml  # VSO — syncs Vault → K8s Secrets (sync-wave 5)
     ├── vault-config.yaml            # VaultConnection + auth-delegator SA (sync-wave 6)
     ├── apps-project.yaml            # AppProject + apps-{dev,staging,prod} ns (wave 6)
@@ -121,14 +121,14 @@ bootstrap/
 core/                                # values / overlays for platform components
 ├── argocd/
 │   ├── values.yaml
-│   └── routing/                     # VirtualService → argocd.lab.lan (attaches to public-gateway)
+│   └── routing/                     # VirtualService for argocd (no public Cloudflare hostname — gate behind Access SSO before exposing)
 ├── routing/
 │   └── public-gateway.yaml          # shared Gateway in istio-ingress; hosts: ["*.auraenterprise.solutions"]
 ├── cloudflared/                     # Cloudflare Tunnel daemon (Deployment + namespace)
 ├── istio/{istiod,gateway}-values.yaml
 ├── monitoring/values.yaml           # kube-prometheus-stack
 ├── kiali/values.yaml
-├── vault/                           # Helm values + VirtualService for vault.lab.lan
+├── vault/                           # Helm values + VirtualService for vault (port-forward only by default — do not expose publicly)
 ├── vault-secrets-operator/          # VSO Helm values
 ├── vault-config/                    # VaultConnection + auth-delegator SA (cross-namespace)
 ├── apps-project/                    # AppProject `apps` + 3 env namespaces
@@ -259,7 +259,7 @@ helm install argocd argo/argo-cd --namespace argocd --version 9.5.17 --values ~/
 
 # 5. Register the private-repo credential (skip if the repo is public).
 #    Chicken-and-egg: ArgoCD can't fetch the repo until this Secret exists,
-#    so it has to be created imperatively here. Move it under SOPS later.
+#    so it has to be created imperatively here. Move it under Vault later.
 printf 'PAT: '; read -s PAT; echo
 kubectl -n argocd create secret generic aura-gitops-repo \
   --from-literal=type=git \
@@ -379,7 +379,7 @@ kubectl get secret ecr-pull -n apps-dev -n apps-prod -n apps-staging --ignore-no
 
 After that, any `ImagePullBackOff` pods will pick up the Secret on the next pull retry — or force it with `kubectl rollout restart deploy/<name> -n <ns>`.
 
-### Imperative Secrets for `report-ms` (per env, until SOPS+age lands)
+### Imperative Secrets for `report-ms` (per env — legacy, superseded by Vault migration)
 
 `report-ms-secrets` — sensitive env vars consumed via `envFrom: secretRef`. Replace the placeholder values with real ones before running:
 
@@ -462,35 +462,25 @@ Smoke-test self-management: change `core/argocd/values.yaml`, commit, push. The 
 
 ## Access the UI
 
-### Steady-state — via Istio at `http://argocd.lab.lan`
+### Default access — port-forward
 
-The `argocd-routing` Application installs a `Gateway` (in `istio-ingress` ns, listening on :80) and a `VirtualService` (in `argocd` ns, routing to `argocd-server:80`). One-time DNS:
-
-```bash
-# Find the address the gateway is reachable on
-kubectl -n istio-ingress get svc istio-ingressgateway
-
-# Then on whichever machine you'll browse from, add to /etc/hosts:
-#   <gateway-ip>   argocd.lab.lan
-# For kind on the Mac mini, depending on your kind config / cloud-provider-kind /
-# MetalLB setup, this is typically 127.0.0.1 (with extraPortMappings) or the
-# MetalLB-assigned IP from the configured pool.
-```
-
-Verify end-to-end:
-
-```bash
-curl -v http://argocd.lab.lan/    # expect 200 + ArgoCD HTML
-```
-
-If `curl` 503s or "no healthy upstream," the Gateway selector isn't matching the gateway pods — `kubectl -n istio-ingress get pods --show-labels` and confirm `istio=ingressgateway` is among the labels.
-
-### Fallback — port-forward (when routing isn't up yet, e.g. fresh bootstrap)
+ArgoCD has a `VirtualService` (host `argocd.auraenterprise.solutions`) but is **not** in the Cloudflare tunnel's public hostname list — the admin UI is a root-level credential target, exposing it without Cloudflare Access SSO gating would be a footgun. Day-to-day access is port-forward:
 
 ```bash
 kubectl -n argocd port-forward svc/argocd-server 8080:80
 # http://localhost:8080
 ```
+
+### Public access via Cloudflare Access (if you want it)
+
+When you want to reach ArgoCD from outside the Mac mini:
+
+1. Cloudflare Zero Trust → **Access** → **Applications** → **Add an application** → **Self-hosted**.
+2. Application domain: `argocd.auraenterprise.solutions`.
+3. Policy: allow only your email (GitHub/Google OIDC).
+4. Add `argocd` to the tunnel's Public Hostnames list (Service: `http://istio-ingressgateway.istio-ingress.svc.cluster.local:80`).
+
+After this, `https://argocd.auraenterprise.solutions` goes through Cloudflare Access (GitHub/Google login) before showing the ArgoCD login. Same pattern works for Vault / Grafana / Kiali — one Access app per hostname.
 
 ### First login
 
@@ -529,7 +519,7 @@ kubectl -n kiali port-forward svc/kiali 20001:20001
 # http://localhost:20001
 ```
 
-Adding `grafana.lab.lan` and `kiali.lab.lan` `VirtualService`s is a follow-up — see Backlog.
+Adding `grafana.auraenterprise.solutions` and `kiali.auraenterprise.solutions` `VirtualService`s (gated behind Cloudflare Access) is a follow-up — see Backlog.
 
 ## Managing secrets
 
@@ -537,7 +527,7 @@ Application secrets live in **HashiCorp Vault**, self-hosted in-cluster (`core/v
 
 ```
 You:    vault kv put aura/dev/report-ms KEYCLOAK_CLIENT_SECRET=... MAIL_PASSWORD=...
-        # via UI at http://vault.lab.lan, or `vault` CLI port-forwarded
+        # via UI (port-forward only) or `vault` CLI inside the pod
 
 Vault:  encrypted at rest on /vault/data (Raft storage), sealed/unsealed via
         Shamir's secret sharing (5 keys, 3 needed to unseal)
@@ -597,7 +587,7 @@ kubectl -n vault exec -it vault-0 -- vault operator unseal   # paste key 3
 kubectl -n vault exec -it vault-0 -- vault status
 ```
 
-After this you can log in to the UI at `http://vault.lab.lan` (DNS entry required — see DNS setup above) with the root token. **Rotate the root token to a short-lived token via the UI's "Generate Root" flow once you've configured proper auth methods.** The bootstrap root token grants everything; only use it for initial setup.
+After this you can log in to the UI with the root token via `kubectl -n vault port-forward svc/vault 8200:8200` → `http://localhost:8200`. (Vault is intentionally NOT exposed via Cloudflare — even gated by Access, the blast radius of a token leak is your entire app secret store.) **Rotate the root token to a short-lived token via the UI's "Generate Root" flow once you've configured proper auth methods.** The bootstrap root token grants everything; only use it for initial setup.
 
 ### Pod restart unseal (the cost of no auto-unseal)
 
@@ -731,7 +721,7 @@ Everything else lands via GitOps.
 ```
 core/vault/
 ├── values.yaml                         # Vault server Helm values
-├── routing/virtualservice.yaml         # vault.lab.lan
+├── routing/virtualservice.yaml         # vault VirtualService (port-forward only by default)
 core/vault-secrets-operator/
 ├── values.yaml                         # VSO Helm values
 core/vault-config/
@@ -815,9 +805,9 @@ The bootstrap is idempotent. Re-run steps 3 → 6 above against a fresh cluster.
 - [ ] **Vault auto-unseal (pragmatic homelab pattern)** — only if manual unseal becomes painful. Likely shape: init container reads unseal keys from a K8s Secret on startup and calls `vault operator unseal`. Weakens the seal guarantee but acceptable on a single-node cluster.
 - [ ] **Dynamic Vault secrets (Postgres + AWS STS)** — Vault's headline feature. Use the `database` engine to issue short-lived PG credentials per app, and the `aws` engine to mint STS tokens for the ECR rotator (replacing the static AWS access key). Far enough out that we don't need to plan it now.
 - [x] ~~**Secrets management strategy**~~ — chose Vault over SOPS+age for the long-term path. See [Managing secrets](#managing-secrets). Vault server lands at sync-wave 5; VSO + per-app migration are follow-up commits.
-- [ ] **cert-manager** for TLS at `*.lab.lan`. Options: self-signed CA via the cert-manager bootstrap Issuer (zero external deps, browser warnings) or Let's Encrypt via DNS-01 if the lab domain ever becomes routable. Currently all routing is plain HTTP, which is OK on the LAN only.
-- [ ] **Istio routing for Grafana + Kiali** — `grafana.lab.lan` / `kiali.lab.lan` VirtualServices attaching to the shared `public-gateway`.
-- [x] ~~**`public-gateway` refactor**~~ — landed. One Gateway in `istio-ingress` listens on `*.lab.lan`; per-service `VirtualService` lives with the app. Adding a new public host is now a single-resource change.
+- [x] ~~**Public ingress TLS**~~ — Cloudflare provides Universal SSL at the edge for all first-level subdomains of `auraenterprise.solutions`. cert-manager is not needed unless we move to in-cluster TLS later (e.g. for in-mesh STRICT mTLS — separate concern).
+- [ ] **Istio routing + Cloudflare Access for Grafana + Kiali** — `grafana.auraenterprise.solutions` / `kiali.auraenterprise.solutions` VirtualServices attaching to the shared `public-gateway`, with Cloudflare Access SSO policies gating each. Same pattern as the ArgoCD/Vault rollout plan.
+- [x] ~~**`public-gateway` refactor**~~ — landed. One Gateway in `istio-ingress` listens on `*.auraenterprise.solutions`; per-service `VirtualService` lives with the app. Adding a new public host is now a VirtualService change (+ one Cloudflare ingress rule if not using the wildcard tunnel rule).
 - [ ] **Tracing** — Tempo (or Jaeger), wired into Kiali's `external_services.tracing`.
 - [x] ~~**Source Hydrator enablement**~~ — landed with Postgres (`apps/postgres/overlays/<env>` → `environments/<env>` branches). Spec is `spec.sourceHydrator` on every app Application; see Concepts.
 - [ ] **CNPG backups** — `Cluster.spec.backup` to S3/MinIO with PITR. Required before any real prod use. Currently marked `# TODO` in `apps/postgres/overlays/prod/kustomization.yaml`.

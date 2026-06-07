@@ -11,6 +11,6 @@ external_services:
   grafana:
     enabled: true
     internal_url: http://kube-prometheus-stack-grafana.monitoring.svc.cluster.local
-    external_url: http://grafana.lab.lan
+    external_url: https://grafana.auraenterprise.solutions
   tracing:
     enabled: false   # add Tempo/Jaeger later

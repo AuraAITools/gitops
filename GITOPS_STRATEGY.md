@@ -1,7 +1,10 @@
 # GitOps + ArgoCD Strategy
 
-**Date:** 2026-05-30
+**Date:** 2026-05-30 (research)
+**Updated:** 2026-06-07 (implementation notes added to §6)
 **Method:** Stochastic-consensus synthesis from 4 independent research agents covering (1) repository structure, (2) environment promotion, (3) secrets management, (4) production ecosystem & roadmap.
+
+> **Implementation status (2026-06-07)**: This repo started from Solution 1 and adopted Source Hydrator from day one. Two deliberate deviations from the original Solution 1 stack: (a) **HashiCorp Vault + Vault Secrets Operator** instead of ESO + cloud KMS, for self-hosting and learning value; (b) cluster runs on **`kind` on a single Mac mini** rather than a managed cloud K8s. Public ingress is **Cloudflare Tunnel** rather than a cloud LoadBalancer. See `AURA_STACK_DEPLOYMENT.md` for the live shape.
 
 ---
 
@@ -220,13 +223,24 @@ Reached as consensus across all four research streams:
 
 ## 6. Recommendation for `aura/gitops`
 
-Start with **Solution 1** (Modern Default). It is the lowest-risk, highest-leverage starting point for a greenfield repo, and every architectural decision in it composes cleanly into Solution 2 when scale demands. Specifically:
+Start with **Solution 1** (Modern Default). It is the lowest-risk, highest-leverage starting point for a greenfield repo, and every architectural decision in it composes cleanly into Solution 2 when scale demands.
 
-- Initialise the directory tree shown in Solution 1.
-- Stand up ArgoCD 3.2+ with App-of-Apps bootstrap.
-- Use ApplicationSet Matrix(git-dir × cluster) from day one — do not write per-app `Application` YAML by hand.
-- Adopt ESO + Reloader + Kyverno from day one — retrofitting any of them is painful.
-- Defer Kargo and Source Hydrator until you feel actual pain from the PR-bot or overlay folders. They are the planned upgrade path, not the starting point.
+### What was actually adopted (2026-06-07)
+
+| Recommendation | Adopted? | Notes |
+| :--- | :--- | :--- |
+| Solution 1 base structure | ✅ | `apps/<svc>/{base,overlays/<env>}`, App-of-Apps root, AppProject `apps`, multi-source Applications for Helm charts. |
+| ArgoCD 3.2+ App-of-Apps bootstrap | ✅ | Pinned to chart `9.5.17` → ArgoCD `v3.4.3`. |
+| ApplicationSet Matrix from day one | ❌ deferred | Per-app `Application` YAML used for now; ApplicationSet refactor is on the backlog. Acceptable for the current ~13 Applications. |
+| ESO + cloud KMS for secrets | ❌ **swapped for Vault + VSO** | Self-hosted Vault chosen for learning value + no cloud KMS dep. See `AURA_STACK_DEPLOYMENT.md` §9. Sealed Secrets remains an anti-pattern; this swap is within Solution 1's "modern" envelope. |
+| Reloader for ConfigMap/Secret-triggered restarts | ❌ deferred | VSO's `rolloutRestartTargets` covers the Vault-managed Secret case (the only secret-rotation source). If we add non-Vault Secrets that need rotation triggers, revisit. |
+| Kyverno for policy | ❌ deferred | Not yet a pressure point in the homelab. |
+| Defer Kargo and Source Hydrator | ❌ **Source Hydrator adopted from day one** | Conscious choice — wanted hands-on with the 3.x trajectory feature before scale forces it. Hydrated YAML lives on `environments/<env>` branches. Kargo still deferred. |
+
+### Other implementation deviations
+- **Cluster**: `kind` on a single Mac mini (not a managed cloud K8s as Solution 1 assumes). `dev`/`staging`/`prod` are namespaces, not separate clusters.
+- **Public ingress**: Cloudflare Tunnel + Istio gateway (`*.auraenterprise.solutions`), not a cloud LoadBalancer.
+- **Auto-unseal for Vault**: none — Shamir + manual unseal, no cloud KMS. Acceptable on a single-node homelab; revisit when there are multiple Vault replicas or restart frequency becomes painful.
 
 ---
 

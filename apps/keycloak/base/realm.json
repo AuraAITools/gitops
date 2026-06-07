@@ -1196,7 +1196,8 @@
       "clientAuthenticatorType": "client-secret",
       "secret": "**********",
       "redirectUris": [
-        "https://accounts.auratest.dev",
+        "https://accounts.auraenterprise.solutions",
+        "https://accounts-dev.auraenterprise.solutions",
         "http://localhost:3000/api/auth/callback/keycloak",
         "aura-report://auth/callback",
         "http://localhost:3000/auth/new-user",

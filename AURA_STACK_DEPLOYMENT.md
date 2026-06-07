@@ -1,23 +1,30 @@
 # Aura Stack — Kubernetes Deployment Architecture
 
-**Date:** 2026-06-03
-**Status:** Draft for review, not yet implemented
-**Scope:** Designing how `aura-report-website`, `report-ms`, Keycloak, and SpiceDB land on the gitops-managed cluster across `dev` / `staging` / `prod`.
+**Drafted:** 2026-06-03
+**Updated:** 2026-06-07
+**Status:** Mostly implemented — see §2 for per-layer status. SpiceDB is the only major design item still pending.
+**Scope:** How `aura-report-website`, `report-ms`, Keycloak, and SpiceDB land on the gitops-managed cluster across `dev` / `staging` / `prod`.
 
-This is a companion to [`GITOPS_STRATEGY.md`](./GITOPS_STRATEGY.md) (the *how we deploy*) and [`README.md`](./README.md) (the *what's currently deployed*). It describes the *what's about to be deployed*.
+This is a companion to [`GITOPS_STRATEGY.md`](./GITOPS_STRATEGY.md) (the *how we deploy*) and [`README.md`](./README.md) (the *what's currently deployed*). The README is the live-truth operational doc; this doc captures the design decisions and trade-offs we made along the way.
+
+### Deviations from the original draft
+- **Domain**: `auraenterprise.solutions` everywhere — `auratest.dev` was deprecated, `lab.lan` was never wired up.
+- **Public ingress**: Cloudflare Tunnel (in-cluster `cloudflared` Deployment) terminates TLS at Cloudflare's edge and tunnels to the Istio gateway. No public LoadBalancer or DNS infrastructure on the Mac mini.
+- **Secrets**: HashiCorp Vault (self-hosted, single-node Raft, Shamir seal) + Vault Secrets Operator (VSO) — chose this over the original SOPS+age plan for the learning value + dynamic-secrets ceiling.
+- **Cluster**: `kind` on a single Mac mini (not k3d as originally assumed).
 
 ---
 
 ## 1. Overview
 
 ```
-   ┌──────────────────┐  HTTPS  ┌─────────────────────────┐
-   │   Browser/User   │ ◀─────▶ │ Istio Gateway (*.lab.lan│   external hostnames →
-   └──────────────────┘         │   or *.auratest.dev)     │   *.lab.lan in homelab,
-                                └─────────┬───────────────┘   auratest.dev in prod
-                                          │
-              ┌───────────────────────────┼───────────────────────────────┐
-              ▼                           ▼                               ▼
+   ┌──────────────────┐  HTTPS  ┌────────────────────────┐  HTTP  ┌──────────────────────┐
+   │   Browser/User   │ ◀─────▶ │ Cloudflare edge (TLS)  │ ◀────▶ │ cloudflared (in-cl.) │
+   └──────────────────┘         │ *.auraenterprise.solut │        │ → istio gateway      │
+                                └────────────────────────┘        └─────────┬────────────┘
+                                                                            │
+              ┌─────────────────────────────────────────────────────────────┼─────────────┐
+              ▼                                                             ▼             ▼
       ┌──────────────────┐       ┌────────────────────┐         ┌────────────────────┐
       │ aura-report-     │       │ keycloak           │         │ report-ms          │
       │   website (BFF)  │       │ (accounts.*)       │         │ (api.*)            │
@@ -61,14 +68,16 @@ Per environment (`apps-dev`, `apps-staging`, `apps-prod`):
 | :--- | :--- | :--- |
 | Cluster, ArgoCD, Istio, observability | ✅ Done | Per `README.md`. |
 | CNPG operator | ✅ Done | At sync-wave 6. |
-| Postgres clusters (aura / keycloak / spicedb) × 3 envs | ✅ Done (skeleton) | At sync-wave 7. Needs version pinning + `track_commit_timestamp` patch (§4). |
-| Istio Gateway routing (only `argocd.lab.lan` so far) | ⏳ Partial | Will need to broaden to `*.lab.lan` or add per-host hosts. |
-| ECR image pull credentials | ❌ Not yet | Required by all 4 custom images. §6. |
-| Application Deployments (BFF, report-ms, Keycloak, SpiceDB) | ❌ Not yet | The bulk of this doc. |
-| Non-DB Secrets (NextAuth, Keycloak admin pw, SpiceDB preshared key, AWS S3 creds, OIDC client secrets, email) | ❌ Not yet | Imperative until SOPS+age lands. |
+| Postgres clusters (aura / keycloak / spicedb) × 3 envs | ✅ Done | At sync-wave 7. Version-pinned per §4. |
+| Public ingress (Cloudflare Tunnel + shared Istio `public-gateway` on `*.auraenterprise.solutions`) | ✅ Done | `core/cloudflared/` (in-cluster) + `core/routing/public-gateway.yaml`. Cloudflare wildcard tunnel rule routes everything; Istio VirtualServices select the right Service by Host. |
+| ECR image pull credentials | ✅ Done | `core/ecr-rotator/` CronJob refreshes `ecr-pull` Secret in each `apps-<env>` every 8h. Per §6.1. |
+| Keycloak Deployment + routing (dev + prod) | ✅ Done | Per `apps/keycloak/`. Image is still the upstream `quay.io/keycloak/keycloak:25.0`; custom theme image is pending (§6.2). |
+| report-ms Deployment + routing (dev + prod) | ✅ Done | Per `apps/report-ms/`. Secrets are now Vault-managed via VSO. |
+| BFF (aura-report-website) Deployment + routing (dev + prod) | ✅ Done | Per `apps/aura-report-website/`. Wired to `app.auraenterprise.solutions` / `app-dev.auraenterprise.solutions`. |
+| Secrets management (HashiCorp Vault + VSO) | ✅ Done | Vault server + VSO + per-app `VaultStaticSecret` for report-ms. `bff-secrets` and `keycloak-admin-secret` migration pending. |
 | Liquibase migrations (report-ms) | ✅ Built into app | Spring Boot auto-runs on startup; no Job needed. |
-| SpiceDB migrate | ❌ Not yet | Will be an init container on the SpiceDB Deployment. |
-| Keycloak realm import + custom themes | ❌ Not yet | Themes baked into a custom image (§6); realm-import.json mounted as ConfigMap. |
+| SpiceDB Deployment + init-container migrate + schema-apply Job | ❌ Not yet | Postgres backing it (PG 18 + `track_commit_timestamp=on`) is ready; service itself is the next phase. |
+| Keycloak custom-theme image | ❌ Not yet | Themes baked into a custom image (§6.2); realm-import.json already mounted as ConfigMap with the upstream image. |
 
 ---
 
@@ -185,7 +194,7 @@ bootstrap/apps/
 core/
 ├── (existing) ...
 └── routing/
-    └── public-gateway.yaml             # refactor argocd-routing's Gateway → shared *.lab.lan
+    └── public-gateway.yaml             # shared gateway on *.auraenterprise.solutions (landed)
 ```
 
 Per-env overlays patch what genuinely differs:
@@ -232,20 +241,32 @@ The 14 `.zed` files live with report-ms. Two ways to get them into SpiceDB:
 
 ---
 
-## 7. Networking — Istio Gateway + VirtualServices
+## 7. Networking — Cloudflare Tunnel + Istio Gateway + VirtualServices
 
-### 7.1 Refactor the gateway first
-Currently `core/argocd/routing/gateway.yaml` is host-specific (`argocd.lab.lan`). Refactor to a shared `public-gateway` with `hosts: ["*.lab.lan"]` (and `*.auratest.dev` later) so we don't grow Gateways linearly with hosts.
+### 7.1 Public ingress architecture (✅ implemented)
+The Mac mini is behind NAT; no public IPv4. Cloudflare Tunnel solves this without exposing any inbound port:
 
-Move it to `core/routing/public-gateway.yaml`, and have each app's `VirtualService` reference `routing/public-gateway` cross-namespace.
+```
+Browser → Cloudflare edge (HTTPS, Universal SSL) → Tunnel (outbound from in-cluster cloudflared)
+       → http://istio-ingressgateway.istio-ingress.svc.cluster.local:80
+       → public-gateway (matches *.auraenterprise.solutions)
+       → per-app VirtualService (matches concrete host)
+       → app Service
+```
 
-### 7.2 Per-env hostnames
-| Service | Homelab host | Prod host |
+Single shared `Gateway` (`istio-ingress/public-gateway`, listens on `*.auraenterprise.solutions`); each app's `VirtualService` adds its concrete host. Cloudflare Tunnel uses a **single wildcard public hostname rule** (`*.auraenterprise.solutions → http://istio-ingressgateway.istio-ingress.svc.cluster.local:80`) — all routing logic lives in Istio.
+
+### 7.2 Per-env hostnames (✅ implemented for dev + prod)
+| Service | Dev | Prod |
 | :--- | :--- | :--- |
-| BFF | `app-dev.lab.lan` / `app-staging.lab.lan` / `app.lab.lan` | `auratest.dev` |
-| Keycloak public | `accounts-dev.lab.lan` etc. | `accounts.auratest.dev` |
-| Keycloak admin | `admin-accounts-dev.lab.lan` | `admin-accounts.auratest.dev` |
-| report-ms API (public; the BFF calls it directly via cluster DNS internally) | `api-dev.lab.lan` (mobile client only) | `api.auratest.dev` |
+| BFF | `app-dev.auraenterprise.solutions` | `app.auraenterprise.solutions` |
+| Keycloak public | `accounts-dev.auraenterprise.solutions` | `accounts.auraenterprise.solutions` |
+| Keycloak admin | `admin-accounts-dev.auraenterprise.solutions` | `admin-accounts.auraenterprise.solutions` |
+| report-ms API (mobile/external clients; BFF→report-ms is cluster-DNS internal) | `api-dev.auraenterprise.solutions` | `api.auraenterprise.solutions` |
+
+Staging hostnames are reserved (`app-staging.auraenterprise.solutions` etc.) but `apps-staging` workloads aren't deployed yet.
+
+Admin / dashboard services (`argocd`, `vault`, `grafana`, `kiali`) are intentionally NOT in the Cloudflare tunnel's public hostname list — they live at `*.auraenterprise.solutions` in Istio but require either port-forward or Cloudflare Access SSO to reach. See README's Dashboards table.
 
 ### 7.3 Service-to-service inside the cluster
 All internal calls use cluster DNS:
@@ -275,27 +296,36 @@ In practice ArgoCD's Healthy gate is permissive — Deployments are "Healthy" on
 
 ---
 
-## 9. Secrets strategy
+## 9. Secrets strategy (✅ Vault chosen, partially implemented)
 
-We have **two windows** to think about:
+Three layers of secrets:
 
-### 9.1 Today (no SOPS yet)
-- **DB credentials:** CNPG auto-generates `postgres-<db>-app` Secret per cluster. Consumed via `envFrom: secretRef`. **No action needed.**
-- **Non-DB secrets** (NextAuth secret, Keycloak admin password, Keycloak client secrets, SpiceDB preshared key, AWS access key, email SMTP password): Created imperatively per env with `kubectl create secret`. Document the exact `kubectl` commands in this doc + the README's bootstrap section. Same pattern as the ArgoCD repo-write PAT today.
+### 9.1 DB credentials (✅ done, CNPG-managed)
+CNPG auto-generates `postgres-<db>-app` Secret per cluster. Consumed via `envFrom: secretRef` or `valueFrom: secretKeyRef`. Nothing imperative.
 
-### 9.2 After SOPS+age lands (Backlog item)
-- Move all the imperative Secrets to SOPS-encrypted YAML under `apps/<svc>/overlays/<env>/secrets.enc.yaml`.
-- DB credentials stay auto-generated by CNPG; nothing changes there.
-- The bootstrap "imperative" step disappears for SOPS-managed secrets.
+### 9.2 App secrets (HashiCorp Vault + Vault Secrets Operator)
+**Chosen pattern (deviation from original SOPS+age plan):**
+- Self-hosted Vault, single-node Raft, Shamir seal (manual unseal — no cloud KMS).
+- VSO syncs `VaultStaticSecret` CRDs in each `apps-<env>` namespace → native K8s `Secret`s.
+- Apps consume the `Secret`s via standard `envFrom` — Deployment YAML is unchanged from the imperative era.
+- Rotation = `vault kv put aura/<env>/<svc> ...`; VSO picks up within 60s; `rolloutRestartTargets` on the `VaultStaticSecret` triggers a Deployment rollout.
 
-### 9.3 Per-secret inventory (what each app needs)
-| App | Imperative Secret name | Keys |
-| :--- | :--- | :--- |
-| `aura-report-website` | `bff-secrets` | `AUTH_SECRET`, `KEYCLOAK_CLIENT_SECRET` |
-| `report-ms` | `report-ms-secrets` | `KEYCLOAK_CLIENT_SECRET`, `SPICEDB_PRESHARED_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, (`EMAIL_*` if enabled) |
-| `keycloak` | `keycloak-bootstrap` | `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD` |
-| `spicedb` | `spicedb-secrets` | `SPICEDB_GRPC_PRESHARED_KEY` |
-| (cluster-wide) | `ecr-pull` (in each `apps-<env>` ns) | `.dockerconfigjson` (rotated by CronJob) |
+**Implementation status:**
+- ✅ Vault server, Vault Secrets Operator, default `VaultConnection`, `vault-auth-delegator` SA, Kubernetes auth method, `aura` KV-v2 mount, `aura-app-reader` policy — all landed.
+- ✅ `report-ms-secrets` migrated to `VaultStaticSecret` (PoC).
+- ❌ `bff-secrets`, `keycloak-admin-secret` still imperative. Same migration pattern — pending.
+
+### 9.3 ECR pull credentials (✅ done, CronJob-rotated)
+`core/ecr-rotator/` CronJob runs `aws ecr get-login-password` every 8h and refreshes the `ecr-pull` Secret in each `apps-<env>`. The `aws-credentials` Secret in the `ecr-rotator` namespace is the only imperative bootstrap here. Pending follow-up: move it under Vault too.
+
+### 9.4 Per-secret inventory
+| App | Vault path (target) | K8s Secret materialized | Keys | Migrated? |
+| :--- | :--- | :--- | :--- | :--- |
+| `aura-report-website` | `aura/<env>/bff` | `bff-secrets` | `AUTH_SECRET`, `KEYCLOAK_CLIENT_SECRET` | ❌ pending |
+| `report-ms` | `aura/<env>/report-ms` | `report-ms-secrets` | `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_CLIENT_UUID`, `SPICEDB_PRESHARED_KEY`, `AWS_ACCESS_KEY`, `AWS_SECRET_ACCESS_KEY`, `MAIL_PASSWORD` | ✅ done |
+| `keycloak` | `aura/<env>/keycloak` (planned) | `keycloak-admin-secret` | `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD` | ❌ pending |
+| `spicedb` | `aura/<env>/spicedb` (planned) | `spicedb-secrets` | `SPICEDB_GRPC_PRESHARED_KEY` | ❌ pending — SpiceDB not deployed |
+| (cluster-wide) | n/a (CronJob-managed) | `ecr-pull` in each `apps-<env>` | `.dockerconfigjson` | ✅ rotated by CronJob (`core/ecr-rotator/`) |
 
 ---
 
@@ -331,71 +361,40 @@ Three reasonable ways to land this. Recommendation first.
 
 ---
 
-## 11. Phased implementation plan
+## 11. Phased implementation — outcome
 
-Designed so each phase deploys cleanly and reverts cleanly. Roughly 4 hours of work end-to-end on a homelab.
-
-### Phase 1 — Postgres adjustments + ECR pull creds (small commit)
-- Edit `apps/postgres-aura/base/cluster.yaml`: `spec.imageName: ghcr.io/cloudnative-pg/postgresql:16.4`.
-- Edit `apps/postgres-keycloak/base/cluster.yaml`: same.
-- Edit `apps/postgres-spicedb/base/cluster.yaml`: `spec.imageName: ghcr.io/cloudnative-pg/postgresql:18.0`, add `track_commit_timestamp: "on"` under `postgres.parameters`.
-- Add `core/ecr-cred-rotator/` — CronJob that runs `aws ecr get-login-password` every 8h and writes/refreshes a `Secret/ecr-pull` in each `apps-<env>` namespace. Documented imperative AWS credentials Secret as bootstrap.
-- Commit.
-
-### Phase 2 — Build & push the custom Keycloak image
-- Add Dockerfile to `auth-server` repo: `FROM quay.io/keycloak/keycloak:25.0`, `COPY themes/ /opt/keycloak/themes/`.
-- Tag as `aura:keycloak-<version>`, push to ECR.
-- This is a one-time piece of work, not part of the gitops repo.
-
-### Phase 3 — Land Keycloak + SpiceDB (sync-wave 8)
-- Scaffold `apps/keycloak/{base,overlays/<env>}` + `bootstrap/apps/keycloak-<env>.yaml` × 3.
-- Scaffold `apps/spicedb/{base,overlays/<env>}` + `bootstrap/apps/spicedb-<env>.yaml` × 3.
-- Copy `report-ms/application/src/main/resources/spicedb/*.zed` into `apps/spicedb/base/schema/`.
-- Create the imperative Secrets: `keycloak-bootstrap`, `spicedb-secrets` per env.
-- Mount realm-import via ConfigMap (`kubectl create configmap keycloak-realm --from-file=realm-import.json=...`).
-- Commit + push + watch Apps go Healthy in dev first.
-
-### Phase 4 — Land report-ms (sync-wave 9)
-- Scaffold `apps/report-ms/{base,overlays/<env>}` + 3 Applications.
-- Create `report-ms-secrets` per env.
-- Wire env vars from the CNPG-auto-generated `postgres-aura-app` Secret.
-- Verify against Keycloak (token validation works) and SpiceDB (a permission check works).
-
-### Phase 5 — Land aura-report-website (sync-wave 10)
-- Scaffold `apps/aura-report-website/{base,overlays/<env>}` + 3 Applications.
-- Create `bff-secrets` per env.
-- Open the browser, run through the OIDC redirect flow.
-
-### Phase 6 — Public-gateway refactor + Istio routing for all apps
-- Move `argocd-routing`'s Gateway → `core/routing/public-gateway.yaml` (hosts `*.lab.lan`).
-- Update `argocd-routing`'s VirtualService to reference it.
-- Add VirtualServices for BFF, Keycloak, report-ms in each `apps/<svc>/overlays/<env>/`.
-- DNS pointing on Mac mini: `*.lab.lan` → host IP via dnsmasq.
-
-### Phase 7 — Refactor 12 app Applications → 1 ApplicationSet
-Only after the hand-written versions work end-to-end in dev. ApplicationSet matrix generator over `(service, environment)` collapses the 12 Application YAMLs into a single template. Defer per the existing Backlog item.
+| Phase | Status | Notes |
+| :--- | :--- | :--- |
+| **1. Postgres adjustments + ECR pull creds** | ✅ Done | Postgres versions pinned per §4. ECR rotator at `core/ecr-rotator/`. |
+| **2. Custom Keycloak image (themes baked in)** | ❌ Not yet | Currently using upstream `quay.io/keycloak/keycloak:25.0` + ConfigMap realm-import. Adequate until themes are needed. |
+| **3. Land Keycloak** | ✅ Done (dev + prod) | Staging deferred until needed. |
+| **3b. Land SpiceDB** | ❌ Not yet | Postgres backing it is ready; service Deployment + init-migrate + schema-apply Job pending. |
+| **4. Land report-ms** | ✅ Done (dev + prod) | Secrets are Vault-managed. |
+| **5. Land aura-report-website (BFF)** | ✅ Done (dev + prod) | Secrets still imperative — migration to Vault pending. |
+| **6. Public-gateway refactor + public ingress** | ✅ Done | Shared `public-gateway` on `*.auraenterprise.solutions` + Cloudflare Tunnel (in-cluster `cloudflared`). Different from original plan (no dnsmasq + `*.lab.lan`). |
+| **6b. Secrets management** | 🟡 Partial | Vault + VSO + Kubernetes auth method are in. report-ms migrated as PoC. bff + keycloak-admin migrations pending. |
+| **7. Refactor 12 Applications → 1 ApplicationSet** | ❌ Deferred | Per the Backlog. Defer until hand-written Applications are stable. |
 
 ---
 
-## 12. Open questions / TODOs to land before Phase 1
+## 12. Open questions / TODOs
 
-1. **SpiceDB image tag.** Pin a specific version, not `latest`. Pick the latest stable from `authzed/spicedb` releases at write time.
-2. **AWS S3 bucket per env.** Are there 3 distinct buckets (`aura-dev`, `aura-staging`, `aura-prod`) or one shared? Doc assumes 3 distinct; confirm in the Phase 4 overlay.
-3. **Mobile client API endpoint.** Is `api.auratest.dev` actually consumed by `report-mobile`, or is everything routed via the BFF? Doc shows `api.*.lab.lan` exposed; remove if not needed.
-4. **Email enabled in homelab?** `AURA_EMAIL_ENABLED` is configurable. Default `false` for dev/staging, decide later for prod.
-5. **api-gateway service** referenced in docker-compose but never defined — is it just an alias for the nginx reverse-proxy + report-ms? Doc assumes no separate api-gateway in K8s (Istio gateway replaces it).
-6. **CNPG backups.** Still on the backlog. Phase 1 doesn't unblock production use — backups must precede any prod data.
+1. **SpiceDB image tag** — pending. Pin a specific version from `authzed/spicedb` releases before the SpiceDB Deployment lands.
+2. **AWS S3 bucket per env** — overlays currently use `aura-dev` / `aura-prod` patches per `AWS_S3_BUCKET_NAME`. Confirm the bucket names match what's provisioned in AWS.
+3. **Mobile client API endpoint** — `api-dev.auraenterprise.solutions` and `api.auraenterprise.solutions` VirtualServices are in place. Confirm `report-mobile` actually hits these vs. going via the BFF.
+4. **Email enabled** — `MAIL_PASSWORD` is currently a Gmail app password in `report-ms-secrets`. Decide whether SMTP via personal Gmail is right long-term or move to SES.
+5. **CNPG backups** — still on the backlog. Cannot run real production data without this.
+6. **Keycloak custom theme image** — phase 2 work is pending. Currently using the upstream image; themes will come via custom-built image to ECR when the user is ready.
+7. **Vault secrets-migration completion** — `bff-secrets`, `keycloak-admin-secret`, `aws-credentials` (for ECR rotator) all still imperative. Same `VaultStaticSecret` pattern as `report-ms-secrets` — pending.
 
 ---
 
-## 13. Summary
+## 13. Summary — what landed
 
-- **4 new app trees** (`keycloak`, `spicedb`, `report-ms`, `aura-report-website`) following the established `apps/<svc>/{base,overlays/<env>}` Kustomize pattern.
-- **12 new ArgoCD Applications** (3 envs × 4 services) using `spec.sourceHydrator`.
-- **2 small CNPG `Cluster` patches** for Postgres versioning + `track_commit_timestamp`.
-- **1 custom Keycloak image** (themes baked in).
-- **1 ECR credential CronJob** managing pull secrets across the 3 `apps-*` namespaces.
-- **1 Gateway refactor** to handle the growing list of hostnames.
-- **Per-env imperative non-DB Secrets** until SOPS+age lands.
+- **3 of 4 app trees** built: `keycloak`, `report-ms`, `aura-report-website` (dev + prod each). SpiceDB still pending.
+- **Public ingress**: Cloudflare Tunnel (in-cluster `cloudflared`) + shared Istio `public-gateway` on `*.auraenterprise.solutions`. Single wildcard rule in Cloudflare; all routing is Istio VirtualServices.
+- **ECR credential rotator**: `core/ecr-rotator/` CronJob (8h schedule) refreshes the `ecr-pull` Secret across `apps-*`.
+- **Secrets**: HashiCorp Vault (self-hosted, single-node Raft, Shamir seal) + Vault Secrets Operator. `report-ms` migrated as PoC. `bff-secrets` + `keycloak-admin-secret` migrations pending — same per-app pattern.
+- **No custom Keycloak image yet** — running upstream `quay.io/keycloak/keycloak:25.0` with realm-import via ConfigMap. Themes will come later via ECR-built image.
 
-No new operators, no Helm charts. Consistent pattern with the existing platform.
+The original plan held up well except for two deliberate deviations: **Cloudflare Tunnel + auraenterprise.solutions domain** (instead of `dnsmasq` + `*.lab.lan`) and **Vault** (instead of SOPS+age). Both were re-decisions made during implementation based on what we learned along the way; the live state of the repo is the source of truth.

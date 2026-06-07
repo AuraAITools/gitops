@@ -1,5 +1,5 @@
 global:
-  domain: argocd.lab.lan
+  domain: argocd.auraenterprise.solutions
 
 configs:
   params:

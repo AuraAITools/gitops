@@ -1,8 +1,8 @@
 global:
   enabled: true
-  # Plain HTTP at the Vault listener; the eventual *.lab.lan TLS gateway
-  # (cert-manager backlog) terminates externally. In-mesh hop is plaintext
-  # for the homelab. Flip when STRICT mTLS lands.
+  # Plain HTTP at the Vault listener. Cloudflare terminates TLS at the edge
+  # for public traffic; the cluster-internal hop (cloudflared → Istio gateway
+  # → Vault) stays plaintext until STRICT mTLS lands across the mesh.
   tlsDisable: true
 
 # Vault Agent Injector is the older sidecar-injection pattern. We use the
@@ -65,8 +65,9 @@ server:
     # Vault is "ready" only once unsealed; we tolerate Sealed during init.
     path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
 
-# Built-in UI — accessible at vault.lab.lan via the VirtualService in
-# core/vault/routing/. Log in with the root token after `vault operator init`.
+# Built-in UI — accessible via `kubectl port-forward svc/vault 8200:8200`
+# in this namespace. NOT exposed via Cloudflare Tunnel — root token would
+# unlock every app secret. Log in with the root token after `vault operator init`.
 ui:
   enabled: true
   serviceType: ClusterIP
