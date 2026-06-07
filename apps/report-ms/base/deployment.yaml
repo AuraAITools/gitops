@@ -39,6 +39,8 @@ spec:
                   key: password
             - name: DB_URL
               value: "jdbc:postgresql://postgres-aura-rw:5432/aura"
+            - name: SPRING_PROFILES_ACTIVE
+              value: "migration"
           resources:
             requests:
               cpu: 200m
