@@ -1,7 +1,7 @@
 {
   "repoURL": "https://github.com/AuraAITools/gitops.git",
-  "drySha": "6b23052d747d6c4ac3e5bde806ba87bc41ebcfd5",
+  "drySha": "2c465e50a4395f6f56e62573952d58e995ef219d",
   "author": "kevin-otter-liu <kevinliusingapore@gmail.com>",
-  "date": "2026-06-07T15:06:44Z",
-  "subject": "feat: increase cpu and memory limits for report-ms"
+  "date": "2026-06-07T15:11:25Z",
+  "subject": "config: database-runner spring profile"
 }

@@ -127,6 +127,8 @@ spec:
                   name: postgres-aura-app
             - name: DB_URL
               value: jdbc:postgresql://postgres-aura-rw:5432/aura
+            - name: SPRING_PROFILES_ACTIVE
+              value: migration
           image: 696085047789.dkr.ecr.ap-southeast-1.amazonaws.com/aura:database-runner
           imagePullPolicy: Always
           name: db-migrator
