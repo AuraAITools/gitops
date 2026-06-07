@@ -1,7 +1,7 @@
 {
   "repoURL": "https://github.com/AuraAITools/gitops.git",
-  "drySha": "3afe8e0ccd1b0d81dd86a95eee932dc639916896",
+  "drySha": "6b23052d747d6c4ac3e5bde806ba87bc41ebcfd5",
   "author": "kevin-otter-liu <kevinliusingapore@gmail.com>",
-  "date": "2026-06-07T14:51:37Z",
-  "subject": "add startup"
+  "date": "2026-06-07T15:06:44Z",
+  "subject": "feat: increase cpu and memory limits for report-ms"
 }

@@ -70,6 +70,8 @@ spec:
                   name: postgres-aura-app
             - name: DB_URL
               value: jdbc:postgresql://postgres-aura-rw:5432/aura
+            - name: JAVA_TOOL_OPTIONS
+              value: -XX:MaxRAMPercentage=75 -XX:InitialRAMPercentage=50
           envFrom:
             - configMapRef:
                 name: report-ms-config
@@ -97,11 +99,11 @@ spec:
             timeoutSeconds: 5
           resources:
             limits:
-              cpu: "1"
-              memory: 1Gi
+              cpu: "4"
+              memory: 2Gi
             requests:
-              cpu: 500m
-              memory: 600Mi
+              cpu: 1
+              memory: 1Gi
           startupProbe:
             failureThreshold: 40
             httpGet:
@@ -111,6 +113,30 @@ spec:
             timeoutSeconds: 3
       imagePullSecrets:
         - name: ecr-pull
+      initContainers:
+        - env:
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  key: username
+                  name: postgres-aura-app
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: password
+                  name: postgres-aura-app
+            - name: DB_URL
+              value: jdbc:postgresql://postgres-aura-rw:5432/aura
+          image: 696085047789.dkr.ecr.ap-southeast-1.amazonaws.com/aura:database-runner
+          imagePullPolicy: Always
+          name: db-migrator
+          resources:
+            limits:
+              cpu: 500m
+              memory: 600Mi
+            requests:
+              cpu: 200m
+              memory: 300Mi
       serviceAccountName: report-ms
 ---
 apiVersion: networking.istio.io/v1
