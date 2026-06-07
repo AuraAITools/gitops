@@ -540,6 +540,60 @@ VSO:    watches a VaultStaticSecret CRD in apps-<env>; reads Vault as the
 App:    consumes the Secret via envFrom — identical Deployment YAML to today
 ```
 
+### ECR pull credentials (the one secret Vault doesn't manage)
+
+The `ecr-pull` imagePullSecret in each `apps-<env>` namespace is **not** in Vault — it's managed by a CronJob at `core/ecr-rotator/`. Two reasons:
+
+1. **It's a credential, not a secret.** The contents are an OAuth-style token that AWS ECR issues to anyone who can call `aws ecr get-login-password`. Treating it as a long-lived secret in Vault would just add an extra hop for no security gain.
+2. **It expires every 12 hours.** Vault-managed Secrets have indefinite lifetime by default. ECR tokens force rotation; the rotator runs every 8h to stay ahead of expiry with a 4h grace window.
+
+#### How the rotator works
+
+```
+CronJob (every 8h)
+  └── Pod (alpine/k8s image — bundles aws-cli + kubectl)
+       ├── aws ecr get-login-password --region ap-southeast-1   → 12h token
+       └── for ns in apps-{dev,staging,prod}:
+             kubectl -n $ns create secret docker-registry ecr-pull \
+               --docker-server=<acct>.dkr.ecr.<region>.amazonaws.com \
+               --docker-username=AWS --docker-password=<token> \
+               --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Per-namespace `Role` + `RoleBinding` (created in gitops via `core/ecr-rotator/rbac.yaml`) grant the rotator's ServiceAccount the minimum needed: `get/create/update/patch` on Secrets, scoped to the three `apps-*` namespaces. No `ClusterRole`.
+
+#### What stays imperative
+
+One Secret in the `ecr-rotator` namespace — the AWS access key the CronJob uses to talk to ECR:
+
+```bash
+kubectl -n ecr-rotator create secret generic aws-credentials \
+  --from-literal=AWS_ACCESS_KEY_ID=... \
+  --from-literal=AWS_SECRET_ACCESS_KEY=... \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The IAM user needs only `ecr:GetAuthorizationToken`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` on the `aura` repo. (Full bootstrap block + IAM policy JSON earlier in this doc, under "ECR pull-credential rotator (one-time bootstrap)".)
+
+#### When the secret goes missing
+
+If app pods are stuck `ImagePullBackOff` with "no basic auth credentials for the backend image", the `ecr-pull` Secret in their namespace is missing or stale. Most likely the CronJob hasn't fired yet (default schedule is every 8h on the hour). Trigger it manually:
+
+```bash
+JOB=ecr-pull-manual
+kubectl -n ecr-rotator delete job $JOB --ignore-not-found
+kubectl -n ecr-rotator create job --from=cronjob/ecr-pull-rotator $JOB
+kubectl -n ecr-rotator wait --for=condition=Complete --timeout=120s job/$JOB
+kubectl -n ecr-rotator logs job/$JOB
+# Expect: "token-bytes=<N>" + 3x "secret/ecr-pull configured"
+```
+
+Then `kubectl -n <ns> rollout restart deploy/<app>` to make the kubelet retry the pull immediately instead of waiting on the back-off.
+
+#### Could we put the AWS creds in Vault instead?
+
+Yes — and that's the eventual plan (backlog item). Pattern would be: VSO syncs `aws-credentials` from Vault → CronJob picks it up. Removes the last imperative bootstrap step. Not urgent — the creds are write-once and don't rotate often.
+
 ### Why Vault (and not SOPS / sealed-secrets / ESO)
 
 - **Learning**: industry-standard tool; same patterns at scale apply at this scale.

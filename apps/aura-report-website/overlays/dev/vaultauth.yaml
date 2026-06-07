@@ -1,0 +1,12 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: aura-report-website
+spec:
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: aura-report-website-dev      # Vault role; created imperatively (see README)
+    serviceAccount: aura-report-website
+    audiences:
+      - vault
