@@ -1,6 +1,6 @@
 {
   "repoURL": "https://github.com/AuraAITools/gitops.git",
-  "drySha": "56d5ecfa474f104df9ab258fc8881d0523a9d945",
+  "drySha": "2e7bb931a52927a588cfd4be417e15dd3b040cc8",
   "commands": [
     "kustomize build ./apps/report-ms/overlays/dev"
   ]

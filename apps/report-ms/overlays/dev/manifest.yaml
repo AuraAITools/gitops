@@ -9,10 +9,10 @@ data:
   AURA_EMAIL_FROM_ADDRESS: kevinliusingapore@gmail.com
   AWS_REGION: ap-southeast-1
   AWS_S3_BUCKET_NAME: aura-dev
-  JWK_SET_URI: http://keycloak:8080/realms/aura/protocol/openid-connect/certs
+  JWK_SET_URI: https://accounts-dev.auraenterprise.solutions/realms/aura/protocol/openid-connect/certs
   KEYCLOAK_CLIENT_ID: aura-application-client
   KEYCLOAK_CLIENT_REALM: aura
-  KEYCLOAK_CLIENT_SERVER_URL: http://keycloak:8080
+  KEYCLOAK_CLIENT_SERVER_URL: https://accounts-dev.auraenterprise.solutions
   MAIL_USERNAME: kevinliusingapore@gmail.com
   SPICEDB_PLAINTEXT: "true"
   SPICEDB_TARGET: spicedb:50051
