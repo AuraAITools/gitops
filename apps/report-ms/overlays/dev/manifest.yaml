@@ -78,11 +78,10 @@ spec:
           image: 696085047789.dkr.ecr.ap-southeast-1.amazonaws.com/aura:report-ms
           imagePullPolicy: Always
           livenessProbe:
-            failureThreshold: 5
+            failureThreshold: 3
             httpGet:
               path: /actuator/health/liveness
               port: 8080
-            initialDelaySeconds: 90
             periodSeconds: 30
             timeoutSeconds: 5
           name: report-ms
@@ -90,11 +89,10 @@ spec:
             - containerPort: 8080
               name: http
           readinessProbe:
-            failureThreshold: 30
+            failureThreshold: 3
             httpGet:
               path: /actuator/health/readiness
               port: 8080
-            initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
           resources:
@@ -104,6 +102,13 @@ spec:
             requests:
               cpu: 500m
               memory: 600Mi
+          startupProbe:
+            failureThreshold: 40
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 5
+            timeoutSeconds: 3
       imagePullSecrets:
         - name: ecr-pull
       serviceAccountName: report-ms

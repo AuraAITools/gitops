@@ -1,7 +1,7 @@
 {
   "repoURL": "https://github.com/AuraAITools/gitops.git",
-  "drySha": "2e7bb931a52927a588cfd4be417e15dd3b040cc8",
+  "drySha": "3afe8e0ccd1b0d81dd86a95eee932dc639916896",
   "author": "kevin-otter-liu <kevinliusingapore@gmail.com>",
-  "date": "2026-06-07T14:26:57Z",
-  "subject": "patch: keycloak urls"
+  "date": "2026-06-07T14:51:37Z",
+  "subject": "add startup"
 }
