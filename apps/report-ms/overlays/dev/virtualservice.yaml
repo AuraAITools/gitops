@@ -4,7 +4,7 @@ metadata:
   name: report-ms
 spec:
   hosts:
-    - api-dev.lab.lan
+    - api-dev.auraenterprise.solutions
   gateways:
     - istio-ingress/public-gateway
   http:

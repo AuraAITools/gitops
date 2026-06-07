@@ -14,12 +14,12 @@ patches:
         path: /spec/template/spec/containers/0/env/-
         value:
           name: KC_HOSTNAME
-          value: "http://accounts.lab.lan"
+          value: "https://accounts.auraenterprise.solutions"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
           name: KC_HOSTNAME_ADMIN
-          value: "http://admin-accounts.lab.lan"
+          value: "https://admin-accounts.auraenterprise.solutions"
       # Slightly more headroom in prod.
       - op: replace
         path: /spec/replicas

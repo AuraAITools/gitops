@@ -5,7 +5,7 @@ metadata:
   namespace: vault
 spec:
   hosts:
-    - vault.lab.lan
+    - vault.auraenterprise.solutions
   gateways:
     - istio-ingress/public-gateway
   http:

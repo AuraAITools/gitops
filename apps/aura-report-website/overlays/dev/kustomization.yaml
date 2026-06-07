@@ -13,10 +13,10 @@ patches:
     patch: |
       - op: add
         path: /data/NEXTAUTH_URL
-        value: "http://app-dev.lab.lan"
+        value: "https://app-dev.auraenterprise.solutions"
       - op: add
         path: /data/KEYCLOAK_ISSUER
-        value: "http://accounts-dev.lab.lan/realms/aura"
+        value: "https://accounts-dev.auraenterprise.solutions/realms/aura"
       - op: add
         path: /data/NEXT_PUBLIC_REPORT_SERVICE_URL
-        value: "http://api-dev.lab.lan"
+        value: "https://api-dev.auraenterprise.solutions"

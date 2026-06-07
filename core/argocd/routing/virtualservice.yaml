@@ -5,7 +5,7 @@ metadata:
   namespace: argocd
 spec:
   hosts:
-    - argocd.lab.lan
+    - argocd.auraenterprise.solutions
   gateways:
     - istio-ingress/public-gateway
   http:

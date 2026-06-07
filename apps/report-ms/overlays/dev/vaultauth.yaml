@@ -1,0 +1,15 @@
+# Tells VSO how to authenticate to Vault when pulling secrets for resources
+# in apps-dev. The `vaultConnectionRef` is omitted — VSO falls back to the
+# cluster-default VaultConnection named `default` in vault-secrets-operator-system.
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: report-ms
+spec:
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: report-ms-dev          # Vault role; created imperatively, see README
+    serviceAccount: report-ms    # K8s SA in apps-dev
+    audiences:
+      - vault

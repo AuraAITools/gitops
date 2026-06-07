@@ -1,9 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
+  - serviceaccount.yaml
   - deployment.yaml
   - service.yaml
   - configmap.yaml
-# `report-ms-secrets` is created imperatively per env (see README bootstrap).
-# Not declared here because the values are real credentials and we don't have
-# SOPS yet.
+# `report-ms-secrets` is materialized by VSO from a VaultStaticSecret CRD in
+# the overlay. The CRD lives at overlays/<env>/vaultstaticsecret.yaml; VSO
+# writes the actual K8s Secret. See README's Managing secrets section.

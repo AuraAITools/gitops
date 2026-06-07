@@ -4,7 +4,7 @@ metadata:
   name: aura-report-website
 spec:
   hosts:
-    - app.lab.lan
+    - app.auraenterprise.solutions
   gateways:
     - istio-ingress/public-gateway
   http:

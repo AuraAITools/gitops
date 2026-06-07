@@ -3,6 +3,8 @@ kind: Kustomization
 resources:
   - ../../base
   - virtualservice.yaml
+  - vaultauth.yaml
+  - vaultstaticsecret.yaml
 namespace: apps-prod
 
 patches:

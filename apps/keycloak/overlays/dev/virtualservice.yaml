@@ -4,8 +4,8 @@ metadata:
   name: keycloak
 spec:
   hosts:
-    - accounts-dev.lab.lan
-    - admin-accounts-dev.lab.lan
+    - accounts-dev.auraenterprise.solutions
+    - admin-accounts-dev.auraenterprise.solutions
   gateways:
     - istio-ingress/public-gateway
   http:

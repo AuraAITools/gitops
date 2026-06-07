@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudflared
+  labels:
+    # cloudflared makes its own TLS connection to Cloudflare's edge; double-TLS
+    # via Istio sidecars adds nothing and just costs latency.
+    istio-injection: disabled

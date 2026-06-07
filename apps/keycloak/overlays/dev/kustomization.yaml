@@ -17,9 +17,9 @@ patches:
         path: /spec/template/spec/containers/0/env/-
         value:
           name: KC_HOSTNAME
-          value: "http://accounts-dev.lab.lan"
+          value: "https://accounts-dev.auraenterprise.solutions"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
           name: KC_HOSTNAME_ADMIN
-          value: "http://admin-accounts-dev.lab.lan"
+          value: "https://admin-accounts-dev.auraenterprise.solutions"
