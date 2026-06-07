@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spicedb
+  namespace: apps-dev
+---
+apiVersion: authzed.com/v1alpha1
+kind: SpiceDBCluster
+metadata:
+  name: spicedb
+  namespace: apps-dev
+spec:
+  channel: stable
+  config:
+    datastoreEngine: memory
+    logLevel: info
+  secretName: spicedb-secrets
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: spicedb
+  namespace: apps-dev
+spec:
+  kubernetes:
+    audiences:
+      - vault
+    role: spicedb-dev
+    serviceAccount: spicedb
+  method: kubernetes
+  mount: kubernetes
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: spicedb-secrets
+  namespace: apps-dev
+spec:
+  destination:
+    create: true
+    name: spicedb-secrets
+  mount: aura
+  path: dev/spicedb
+  refreshAfter: 60s
+  type: kv-v2
+  vaultAuthRef: spicedb
