@@ -1,6 +1,7 @@
 # Non-sensitive constants only. Anything per-env (S3 bucket) is patched in the
 # overlay; anything credential-like (KEYCLOAK_CLIENT_SECRET, AWS_*, MAIL_PASSWORD,
-# SPICEDB_PRESHARED_KEY) lives in the imperative `report-ms-secrets` Secret.
+# SPICEDB_PRESHARED_KEY) lives in the `report-ms-secrets` Secret, materialized
+# by VSO from Vault path `aura/<env>/report-ms`.
 #
 # Cluster-DNS short-form works because report-ms runs in apps-<env> and so do
 # its dependencies (keycloak, spicedb, postgres-aura-rw). Same namespace → no

@@ -29,9 +29,10 @@ spec:
             # AWS_REGION, SPICEDB_TARGET, etc.) — overlay patches what differs per env.
             - configMapRef:
                 name: report-ms-config
-            # KEYCLOAK_CLIENT_SECRET, SPICEDB_PRESHARED_KEY, AWS_ACCESS_KEY,
-            # AWS_SECRET_ACCESS_KEY, MAIL_PASSWORD — created imperatively until
-            # SOPS+age lands. See README bootstrap for the kubectl create command.
+            # KEYCLOAK_CLIENT_SECRET, KEYCLOAK_CLIENT_UUID, SPICEDB_PRESHARED_KEY,
+            # AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, MAIL_PASSWORD — materialized
+            # by VSO from Vault path `aura/<env>/report-ms`. See README "Managing
+            # secrets" for the chain (Vault → VaultStaticSecret → K8s Secret).
             - secretRef:
                 name: report-ms-secrets
           env:
@@ -52,11 +53,11 @@ spec:
               value: "jdbc:postgresql://postgres-aura-rw:5432/aura"
           resources:
             requests:
-              cpu: 300m
-              memory: 500Mi
+              cpu: 500m
+              memory: 600Mi
             limits:
-              cpu: 700m
-              memory: 1000Mi
+              cpu: "1"
+              memory: 1Gi
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness
