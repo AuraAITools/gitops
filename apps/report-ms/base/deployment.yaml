@@ -80,13 +80,18 @@ spec:
                   key: password
             - name: DB_URL
               value: "jdbc:postgresql://postgres-aura-rw:5432/aura"
+            # JVM defaults heap to ~25% of container limit. Spring Boot 4 + Hibernate
+            # GC-thrashes through bean init at ~256MB. 75% gives ~1.5GiB heap of the
+            # 2Gi limit and cuts startup time noticeably.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75 -XX:InitialRAMPercentage=50"
           resources:
             requests:
-              cpu: 500m
-              memory: 600Mi
-            limits:
-              cpu: "1"
+              cpu: 1
               memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 2Gi
           # Startup probe gates the other two — kubelet runs ONLY this until it
           # succeeds, then switches to readiness/liveness. failureThreshold * periodSeconds
           # = 40 * 5 = 200s of startup runway. Spring takes ~140s; this leaves slack.
