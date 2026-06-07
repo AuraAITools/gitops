@@ -15,6 +15,12 @@ patches:
       - op: add
         path: /data/AWS_S3_BUCKET_NAME
         value: "aura-prod"
+      - op: add
+        path: /data/KEYCLOAK_CLIENT_SERVER_URL
+        value: "https://accounts.auraenterprise.solutions"
+      - op: add
+        path: /data/JWK_SET_URI
+        value: "https://accounts.auraenterprise.solutions/realms/aura/protocol/openid-connect/certs"
   - target:
       kind: Deployment
       name: report-ms

@@ -8,7 +8,7 @@ resources:
 namespace: apps-dev
 
 patches:
-  # Per-env: S3 bucket. ConfigMap merge — the base ConfigMap data is preserved.
+  # Per-env: S3 bucket + Keycloak public URLs. ConfigMap merge — base data is preserved.
   - target:
       kind: ConfigMap
       name: report-ms-config
@@ -16,3 +16,9 @@ patches:
       - op: add
         path: /data/AWS_S3_BUCKET_NAME
         value: "aura-dev"
+      - op: add
+        path: /data/KEYCLOAK_CLIENT_SERVER_URL
+        value: "https://accounts-dev.auraenterprise.solutions"
+      - op: add
+        path: /data/JWK_SET_URI
+        value: "https://accounts-dev.auraenterprise.solutions/realms/aura/protocol/openid-connect/certs"
