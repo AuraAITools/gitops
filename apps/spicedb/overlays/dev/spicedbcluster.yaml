@@ -1,0 +1,23 @@
+apiVersion: authzed.com/v1alpha1
+kind: SpiceDBCluster
+metadata:
+  # Name `spicedb` keeps report-ms's SPICEDB_TARGET=spicedb:50051 valid
+  # (the operator names the Service after metadata.name).
+  name: spicedb
+spec:
+  # Operator pulls the SpiceDB image from the `stable` channel by default.
+  # Pin a concrete version once we've validated dev. See:
+  # https://github.com/authzed/spicedb/releases
+  channel: stable
+
+  config:
+    # Memory engine for dev — single replica, no datastore, lossy across pod
+    # restarts. Fine for smoke-testing the operator + report-ms integration.
+    # Switch to `postgres` (and bring back a CNPG postgres-spicedb cluster)
+    # before prod traffic; see AURA_STACK_DEPLOYMENT.md §3.4.
+    datastoreEngine: memory
+    logLevel: info
+
+  # Materialized by VSO from Vault path `aura/dev/spicedb`.
+  # Required keys: `preshared_key` (and `datastore_uri` if not memory).
+  secretName: spicedb-secrets

@@ -1,0 +1,22 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: spicedb
+spec:
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    # Create this role in Vault before this Application syncs:
+    #
+    #   vault write auth/kubernetes/role/spicedb-dev \
+    #     bound_service_account_names=spicedb \
+    #     bound_service_account_namespaces=apps-dev \
+    #     policies=aura-app-reader \
+    #     ttl=24h
+    #
+    # The `aura-app-reader` policy already grants read on aura/data/dev/*,
+    # which covers `aura/dev/spicedb`. See README "Creating a Vault role".
+    role: spicedb-dev
+    serviceAccount: spicedb
+    audiences:
+      - vault

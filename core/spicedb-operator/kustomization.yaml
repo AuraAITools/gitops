@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Cluster-scoped install of the SpiceDB operator (CRDs + controller Deployment +
+# RBAC + Service + ConfigMap). The bundle is a single upstream manifest.
+#
+# `releases/latest/download/...` redirects to whatever the most recent GitHub
+# release's asset is. Trade-off: syncs aren't deterministic across operator
+# releases (an upstream release will change what gets applied). Pin to a
+# concrete tag (https://github.com/authzed/spicedb-operator/releases) once
+# the platform stabilizes.
+resources:
+  - https://github.com/authzed/spicedb-operator/releases/latest/download/bundle.yaml
+
+namespace: spicedb-operator-system

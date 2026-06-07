@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: spicedb-operator
+  namespace: argocd
+  finalizers: [resources-finalizer.argocd.argoproj.io]
+  annotations:
+    # Wave 5 — alongside the other platform operators (vault, VSO, kiali).
+    # Per-env SpiceDBCluster CRs land at wave 8, so the CRDs and controller
+    # are guaranteed up first.
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/AuraAITools/gitops.git
+    targetRevision: main
+    path: core/spicedb-operator
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: spicedb-operator-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

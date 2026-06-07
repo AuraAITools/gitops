@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Base is intentionally tiny. The interesting bits — SpiceDBCluster, VaultAuth,
+# VaultStaticSecret — live in overlays because datastore engine + Vault role
+# differ per env. Schema-apply Job (mounts .zed files from report-ms, runs
+# `zed schema write`) is a follow-up; track in AURA_STACK_DEPLOYMENT.md §6.3.
+resources:
+  - serviceaccount.yaml
