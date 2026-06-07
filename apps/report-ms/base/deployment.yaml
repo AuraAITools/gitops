@@ -17,6 +17,35 @@ spec:
       serviceAccountName: report-ms
       imagePullSecrets:
         - name: ecr-pull
+      initContainers:
+        # Runs Liquibase migrations to completion before report-ms starts.
+        # Kubelet blocks the main container until this exits 0. Re-runs on
+        # every pod start (restart, scale-up, node failure, image bump) —
+        # Liquibase's DATABASECHANGELOGLOCK table handles concurrency if
+        # multiple replicas start simultaneously.
+        - name: db-migrator
+          image: 696085047789.dkr.ecr.ap-southeast-1.amazonaws.com/aura:database-runner
+          imagePullPolicy: Always
+          env:
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-aura-app
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-aura-app
+                  key: password
+            - name: DB_URL
+              value: "jdbc:postgresql://postgres-aura-rw:5432/aura"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 300Mi
+            limits:
+              cpu: 500m
+              memory: 600Mi
       containers:
         - name: report-ms
           image: 696085047789.dkr.ecr.ap-southeast-1.amazonaws.com/aura:report-ms
