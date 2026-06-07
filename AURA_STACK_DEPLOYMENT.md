@@ -2,7 +2,7 @@
 
 **Drafted:** 2026-06-03
 **Updated:** 2026-06-07
-**Status:** Mostly implemented — see §2 for per-layer status. SpiceDB is the only major design item still pending.
+**Status:** Mostly implemented — see §2 for per-layer status. SpiceDB is the only major design item still pending — current plan is `spicedb-operator` (CR-driven) rather than a hand-written Deployment.
 **Scope:** How `aura-report-website`, `report-ms`, Keycloak, and SpiceDB land on the gitops-managed cluster across `dev` / `staging` / `prod`.
 
 This is a companion to [`GITOPS_STRATEGY.md`](./GITOPS_STRATEGY.md) (the *how we deploy*) and [`README.md`](./README.md) (the *what's currently deployed*). The README is the live-truth operational doc; this doc captures the design decisions and trade-offs we made along the way.
@@ -12,6 +12,7 @@ This is a companion to [`GITOPS_STRATEGY.md`](./GITOPS_STRATEGY.md) (the *how we
 - **Public ingress**: Cloudflare Tunnel (in-cluster `cloudflared` Deployment) terminates TLS at Cloudflare's edge and tunnels to the Istio gateway. No public LoadBalancer or DNS infrastructure on the Mac mini.
 - **Secrets**: HashiCorp Vault (self-hosted, single-node Raft, Shamir seal) + Vault Secrets Operator (VSO) — chose this over the original SOPS+age plan for the learning value + dynamic-secrets ceiling.
 - **Cluster**: `kind` on a single Mac mini (not k3d as originally assumed).
+- **SpiceDB**: will land via the official [`spicedb-operator`](https://authzed.com/docs/spicedb/ops/operator) (CR-driven) rather than a hand-written Deployment + init-migrate Job. The standalone `postgres-spicedb` CNPG cluster was torn down (2026-06-07) — the operator stack will pick its own datastore strategy.
 
 ---
 
@@ -44,19 +45,19 @@ This is a companion to [`GITOPS_STRATEGY.md`](./GITOPS_STRATEGY.md) (the *how we
                                                                        │   + :8443 HTTP      │
                                                                        └─────────┬───────────┘
                                                                                  │
-       ┌─────────────────────────┬─────────────────────────────────────┬─────────┘
+       ┌─────────────────────────┬─────────────────────────────────────┐
        ▼                         ▼                                     ▼
-┌──────────────────┐    ┌──────────────────┐                  ┌──────────────────┐
-│ postgres-aura    │    │ postgres-keycloak│                  │ postgres-spicedb │
-│ CNPG, PG 18.0    │    │ CNPG, PG 16.4    │                  │ CNPG, PG 18.0    │
-│ db: aura         │    │ db: keycloak     │                  │ db: spicedb      │
-│ public + audit   │    │ self-init        │                  │ track_commit_ts=on│
-└──────────────────┘    └──────────────────┘                  └──────────────────┘
+┌──────────────────┐    ┌──────────────────┐         ┌────────────────────────────────┐
+│ postgres-aura    │    │ postgres-keycloak│         │ SpiceDB datastore              │
+│ CNPG, PG 18.0    │    │ CNPG, PG 16.4    │         │ (operator-pending; engine TBD: │
+│ db: aura         │    │ db: keycloak     │         │  memory for dev, CNPG for prod)│
+│ public + audit   │    │ self-init        │         └────────────────────────────────┘
+└──────────────────┘    └──────────────────┘
 ```
 
 Per environment (`apps-dev`, `apps-staging`, `apps-prod`):
-- **3 Postgres clusters** — already scaffolded (`postgres-aura`, `postgres-keycloak`, `postgres-spicedb`).
-- **3 stateful services** — Keycloak, SpiceDB, report-ms.
+- **2 Postgres clusters** scaffolded (`postgres-aura`, `postgres-keycloak`). SpiceDB's datastore is left to the operator stack — see §3.4.
+- **3 stateful services** — Keycloak, SpiceDB (via operator), report-ms.
 - **1 edge service** — aura-report-website.
 - **1 Istio Gateway + multiple VirtualServices** — to expose BFF, Keycloak public/admin, and report-ms API.
 
@@ -68,7 +69,7 @@ Per environment (`apps-dev`, `apps-staging`, `apps-prod`):
 | :--- | :--- | :--- |
 | Cluster, ArgoCD, Istio, observability | ✅ Done | Per `README.md`. |
 | CNPG operator | ✅ Done | At sync-wave 6. |
-| Postgres clusters (aura / keycloak / spicedb) × 3 envs | ✅ Done | At sync-wave 7. Version-pinned per §4. |
+| Postgres clusters (aura / keycloak) × 3 envs | ✅ Done | At sync-wave 7. Version-pinned per §4. The original `postgres-spicedb` CNPG cluster was torn down (2026-06-07); the operator stack chooses its own datastore. |
 | Public ingress (Cloudflare Tunnel + shared Istio `public-gateway` on `*.auraenterprise.solutions`) | ✅ Done | `core/cloudflared/` (in-cluster) + `core/routing/public-gateway.yaml`. Cloudflare wildcard tunnel rule routes everything; Istio VirtualServices select the right Service by Host. |
 | ECR image pull credentials | ✅ Done | `core/ecr-rotator/` CronJob refreshes `ecr-pull` Secret in each `apps-<env>` every 8h. Per §6.1. |
 | Keycloak Deployment + routing (dev + prod) | ✅ Done | Per `apps/keycloak/`. Image is still the upstream `quay.io/keycloak/keycloak:25.0`; custom theme image is pending (§6.2). |
@@ -76,7 +77,7 @@ Per environment (`apps-dev`, `apps-staging`, `apps-prod`):
 | BFF (aura-report-website) Deployment + routing (dev + prod) | ✅ Done | Per `apps/aura-report-website/`. Wired to `app.auraenterprise.solutions` / `app-dev.auraenterprise.solutions`. |
 | Secrets management (HashiCorp Vault + VSO) | ✅ Done | Vault server + VSO + per-app `VaultStaticSecret` for report-ms. `bff-secrets` and `keycloak-admin-secret` migration pending. |
 | Liquibase migrations (report-ms) | ✅ Built into app | Spring Boot auto-runs on startup; no Job needed. |
-| SpiceDB Deployment + init-container migrate + schema-apply Job | ❌ Not yet | Postgres backing it (PG 18 + `track_commit_timestamp=on`) is ready; service itself is the next phase. |
+| SpiceDB via [`spicedb-operator`](https://authzed.com/docs/spicedb/ops/operator) | ❌ Not yet | Operator install (cluster-scoped) + per-env `SpiceDBCluster` CR + schema-apply Job. Replaces the original hand-written Deployment + init-migrate plan. |
 | Keycloak custom-theme image | ❌ Not yet | Themes baked into a custom image (§6.2); realm-import.json already mounted as ConfigMap with the upstream image. |
 
 ---
@@ -135,17 +136,18 @@ Per environment (`apps-dev`, `apps-staging`, `apps-prod`):
 - **Reaches:** postgres-keycloak only.
 - **Realm:** `aura` (id `095811b5-918c-458e-8551-bfbb18c0b108`), clients `aura-application-client`, `backend-client`, `mobile-client`.
 
-### 3.4 SpiceDB
-- **Image:** `authzed/spicedb:latest` — **pin to a specific tag** before deploying; "latest" is unsafe in GitOps.
-- **Listens on:** `:50051` (gRPC), `:8443` (HTTP gateway, optional).
-- **DB:** `postgres-spicedb` (PG 18.0, `track_commit_timestamp=on`).
-- **Required env vars / args:**
-  - `SPICEDB_GRPC_PRESHARED_KEY` — Secret
-  - `--datastore-engine=postgres`
-  - `--datastore-conn-uri=postgres://...` — from CNPG Secret
-- **Init container:** `authzed/spicedb migrate head` runs once before the server boots. Same image, same env (DB conn).
-- **Schema bootstrap:** 14 `.zed` files in `report-ms/application/src/main/resources/spicedb/` — applied by a sidecar `Job` after migration completes, using `zed schema write index.zed`. Re-apply on every deploy (idempotent).
-- **Reaches:** postgres-spicedb only.
+### 3.4 SpiceDB (via `spicedb-operator`)
+The original plan was a hand-written Deployment + init-container `migrate head` + schema-apply Job, backed by a dedicated CNPG `postgres-spicedb` cluster. We pivoted (2026-06-07) to the official operator pattern; the postgres-spicedb tree was deleted and the per-env Applications removed from `bootstrap/apps/`.
+
+- **Install:** cluster-scoped operator from upstream bundle manifest (or chart). Lives at `core/spicedb-operator/`, sync-wave 5 alongside the other operators. CRDs: `SpiceDBCluster`, `AuthzedEnterpriseCluster`.
+- **Per env:** one `SpiceDBCluster` CR in `apps-<env>` (e.g. `dev-spicedb`). Operator reconciles → Deployment + Service + (optional) migrations Job.
+- **Datastore:** chosen per env via `spec.config.datastoreEngine`:
+  - **Dev / staging:** `memory` (no datastore — lossy across restarts, fine for testing). Zero-infra option.
+  - **Prod:** `postgres` — reintroduce a CNPG `postgres-spicedb` cluster (PG 18 + `track_commit_timestamp=on`) when prod traffic justifies it.
+- **Secret:** `SpiceDBCluster` references a Secret containing `preshared_key` (and `datastore_uri` when not in-memory). Both materialized via Vault Secrets Operator (`apps/spicedb/overlays/<env>/vaultstaticsecret.yaml`).
+- **Service name:** `<spicedb-cluster-name>-spicedb` (e.g. `dev-spicedb.apps-dev.svc:50051`). Update `report-ms`'s `SPICEDB_TARGET` to match once we settle on a name convention.
+- **Schema bootstrap:** still our concern. 14 `.zed` files in `report-ms/application/src/main/resources/spicedb/`. Apply via a Job (`apps/spicedb/base/schema-apply-job.yaml`) using `zed schema write index.zed`. Idempotent — re-applies every sync.
+- **Reaches:** the configured datastore (none / postgres) only.
 
 ---
 
@@ -157,7 +159,7 @@ The current `apps/postgres-*/base/cluster.yaml` files have generic settings. Two
 | :--- | :--- | :--- |
 | `postgres-aura` | Pin `spec.imageName` to `ghcr.io/cloudnative-pg/postgresql:18.0`. | report-ms's Liquibase changelog uses standard DDL; PG 18 is a strict superset. Verify on first dev sync. |
 | `postgres-keycloak` | Pin `spec.imageName` to `ghcr.io/cloudnative-pg/postgresql:16.4`. | Keycloak 25 officially supports PG 13–16; staying inside that matrix avoids vendor-untested behavior. |
-| `postgres-spicedb` | (a) `spec.imageName: ghcr.io/cloudnative-pg/postgresql:18.0`. (b) Add `spec.postgresql.parameters.track_commit_timestamp: "on"`. | SpiceDB requires PG 18 + CDC via `track_commit_timestamp` for the postgres datastore engine. |
+| ~~`postgres-spicedb`~~ | ~~PG 18 + `track_commit_timestamp=on`~~ | Removed 2026-06-07 (operator pivot, §3.4). Will be reintroduced for prod only if/when SpiceDB needs a persistent datastore. |
 
 These are diffable, minimal edits. No restructuring of the postgres tree.
 
@@ -169,13 +171,13 @@ Follow the established pattern: each app gets a DRY tree under `apps/<svc>/{base
 
 ```
 apps/
-├── postgres-{aura,keycloak,spicedb}/   # existing
+├── postgres-{aura,keycloak}/           # existing (postgres-spicedb removed 2026-06-07)
 ├── keycloak/
 │   ├── base/                           # Deployment, Service, ConfigMap (realm-import), ServiceAccount
 │   └── overlays/{dev,staging,prod}/    # replicas, resource limits, KC_HOSTNAME, image tag
-├── spicedb/
-│   ├── base/                           # Deployment (with migrate initContainer), Service, schema-apply Job
-│   └── overlays/{dev,staging,prod}/    # replicas, resource limits, image tag, preshared-key Secret ref
+├── spicedb/                            # operator-managed (planned)
+│   ├── base/                           # schema-apply Job + .zed ConfigMap (datastore-agnostic)
+│   └── overlays/{dev,staging,prod}/    # SpiceDBCluster CR, VaultStaticSecret for preshared_key, datastore choice
 ├── report-ms/
 │   ├── base/                           # Deployment, Service, env/Secret refs, actuator probes
 │   └── overlays/{dev,staging,prod}/    # replicas, resource limits, image tag, DB url, AWS_S3_BUCKET_NAME
@@ -184,12 +186,13 @@ apps/
     └── overlays/{dev,staging,prod}/    # replicas, resource limits, image tag, NEXTAUTH_URL, etc.
 
 bootstrap/apps/
-├── postgres-*-<env>.yaml               # existing × 9
+├── postgres-*-<env>.yaml               # existing × 6 (2 dbs × 3 envs)
+├── spicedb-operator.yaml               # cluster-scoped operator (sync-wave 5; planned)
 ├── keycloak-<env>.yaml                 # × 3
-├── spicedb-<env>.yaml                  # × 3
+├── spicedb-<env>.yaml                  # × 3 (SpiceDBCluster CR per env)
 ├── report-ms-<env>.yaml                # × 3
 ├── aura-report-website-<env>.yaml      # × 3
-└── (eventually one ApplicationSet replaces all 12 app entries; see §11)
+└── (eventually one ApplicationSet replaces the per-env app entries; see §11)
 
 core/
 ├── (existing) ...
@@ -230,11 +233,11 @@ Themes are static assets that live in `auth-server` repo. Two ways:
 **Recommendation:** A. Custom image, pushed to ECR as `aura:keycloak`. Build via the same CI flow as report-ms / BFF.
 
 ### 6.3 SpiceDB schema bootstrap
-The 14 `.zed` files live with report-ms. Two ways to get them into SpiceDB:
+The 14 `.zed` files live with report-ms. With the operator pivot (§3.4) the SpiceDB Deployment itself is no longer our concern, but the schema apply is. Two ways to get them in:
 
 | Option | How |
 | :--- | :--- |
-| **A. Job in `apps/spicedb/base/`** that mounts a ConfigMap of the .zed files and runs `zed schema write`. ConfigMap generated via Kustomize `configMapGenerator` from a local copy of the .zed files. | Schema lives in gitops repo; clean to diff. |
+| **A. Job in `apps/spicedb/base/`** that mounts a ConfigMap of the .zed files and runs `zed schema write`. ConfigMap generated via Kustomize `configMapGenerator` from a local copy of the .zed files. Job waits for the operator-managed Service to be ready (probe `<name>-spicedb:50051`). | Schema lives in gitops repo; clean to diff. |
 | **B. report-ms applies schema on startup** | No extra Job; coupling — schema can't deploy without report-ms |
 
 **Recommendation:** A. Copy the `.zed` files into `apps/spicedb/base/schema/` and `configMapGenerator` them. Idempotent Job re-applies every sync.
@@ -272,23 +275,24 @@ Admin / dashboard services (`argocd`, `vault`, `grafana`, `kiali`) are intention
 All internal calls use cluster DNS:
 - BFF → report-ms: `http://report-ms.apps-<env>.svc:8080`
 - report-ms → Keycloak admin API: `http://keycloak.apps-<env>.svc:8080`
-- report-ms → SpiceDB: `spicedb.apps-<env>.svc:50051`
+- report-ms → SpiceDB: `<name>-spicedb.apps-<env>.svc:50051` — concrete name set by the per-env `SpiceDBCluster` CR's `metadata.name` (e.g. `dev-spicedb`).
 - BFF → Keycloak OIDC: **external** (browser redirect) — `https://accounts.<env-host>`. Use the public hostname even though the BFF could reach Keycloak internally — OIDC issuer URL must match between BFF config and tokens.
 
 ### 7.4 mTLS
 Istio's PERMISSIVE mTLS suffices for now. STRICT mTLS later, with these caveats:
 - Postgres pods are opted out of injection (`sidecar.istio.io/inject=false`). DB traffic stays plaintext on the pod network. That's fine on a homelab single-host cluster.
-- SpiceDB → Postgres also plaintext.
+- SpiceDB → datastore: plaintext when in-memory (no datastore); same opt-out as the other CNPG clusters when on postgres.
 
 ---
 
 ## 8. Sync waves — proposed extension
 
-Existing waves 6 + 7 cover the operator and the Postgres clusters. The app layer goes at waves 8–10:
+Existing waves 6 + 7 cover the operators and the Postgres clusters. The app layer goes at waves 8–10:
 
 | Wave | Apps | Why |
 | :--- | :--- | :--- |
-| **8** | `keycloak-{dev,staging,prod}`, `spicedb-{dev,staging,prod}` (6) | Each needs its Postgres ready (wave 7). They have no inter-dependency. SpiceDB's `migrate` runs as an init container, so it's self-gating. |
+| **5** | `spicedb-operator` (planned) | Cluster-scoped operator from upstream bundle. Installs CRDs (`SpiceDBCluster`, etc.) before any `apps/spicedb` overlay tries to apply them. |
+| **8** | `keycloak-{dev,staging,prod}`, `spicedb-{dev,staging,prod}` (6) | Keycloak needs `postgres-keycloak` (wave 7); SpiceDB needs the operator (wave 5). They have no inter-dependency. The operator handles SpiceDB's own migrate Job. |
 | **9** | `report-ms-{dev,staging,prod}` (3) | Needs Keycloak (OIDC) and SpiceDB (gRPC) ready. ArgoCD waits for wave 8 to be Healthy. report-ms's own Liquibase runs on startup. |
 | **10** | `aura-report-website-{dev,staging,prod}` (3) | Needs report-ms reachable for proxy targets. Will eventually retry against transient backend failures via Next.js. |
 
@@ -324,7 +328,7 @@ CNPG auto-generates `postgres-<db>-app` Secret per cluster. Consumed via `envFro
 | `aura-report-website` | `aura/<env>/bff` | `bff-secrets` | `AUTH_SECRET`, `KEYCLOAK_CLIENT_SECRET` | ❌ pending |
 | `report-ms` | `aura/<env>/report-ms` | `report-ms-secrets` | `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_CLIENT_UUID`, `SPICEDB_PRESHARED_KEY`, `AWS_ACCESS_KEY`, `AWS_SECRET_ACCESS_KEY`, `MAIL_PASSWORD` | ✅ done |
 | `keycloak` | `aura/<env>/keycloak` (planned) | `keycloak-admin-secret` | `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD` | ❌ pending |
-| `spicedb` | `aura/<env>/spicedb` (planned) | `spicedb-secrets` | `SPICEDB_GRPC_PRESHARED_KEY` | ❌ pending — SpiceDB not deployed |
+| `spicedb` | `aura/<env>/spicedb` (planned) | `<name>-spicedb-secrets` (referenced by `SpiceDBCluster.spec.secretName`) | `preshared_key`, `datastore_uri` (if not in-memory) | ❌ pending — operator not yet installed |
 | (cluster-wide) | n/a (CronJob-managed) | `ecr-pull` in each `apps-<env>` | `.dockerconfigjson` | ✅ rotated by CronJob (`core/ecr-rotator/`) |
 
 ---
@@ -357,7 +361,7 @@ Three reasonable ways to land this. Recommendation first.
 **Pros:** Declarative CRs, operator handles upgrades + clustering.
 **Cons:** Two more operators to maintain. Heavier resource footprint on a homelab. Operator behavior is opaque relative to raw Deployment YAML — harder to learn from.
 
-**Pick A.** Land raw manifests for all four apps, follow the postgres pattern. If Keycloak's deployment turns out to be painful (it shouldn't — 25.x is a single statefulish container), revisit B for it alone. Operators are a much later concern.
+**Picked A for Keycloak/BFF/report-ms, C for SpiceDB.** The raw-manifest pattern proved fine for stateful-ish containers, but SpiceDB's `migrate` + `phasedRollout` lifecycle is exactly what `spicedb-operator` is built to handle. The trade-off (one more operator) is worth not hand-rolling that logic. Keycloak stays on raw manifests until 25.x deployment gets painful.
 
 ---
 
@@ -368,7 +372,7 @@ Three reasonable ways to land this. Recommendation first.
 | **1. Postgres adjustments + ECR pull creds** | ✅ Done | Postgres versions pinned per §4. ECR rotator at `core/ecr-rotator/`. |
 | **2. Custom Keycloak image (themes baked in)** | ❌ Not yet | Currently using upstream `quay.io/keycloak/keycloak:25.0` + ConfigMap realm-import. Adequate until themes are needed. |
 | **3. Land Keycloak** | ✅ Done (dev + prod) | Staging deferred until needed. |
-| **3b. Land SpiceDB** | ❌ Not yet | Postgres backing it is ready; service Deployment + init-migrate + schema-apply Job pending. |
+| **3b. Land SpiceDB** | ❌ Not yet (pivoted to operator) | Original CNPG `postgres-spicedb` + hand-written Deployment torn down 2026-06-07. New plan: install `spicedb-operator` at sync-wave 5, per-env `SpiceDBCluster` CRs at wave 8, schema-apply Job in `apps/spicedb/base/`. |
 | **4. Land report-ms** | ✅ Done (dev + prod) | Secrets are Vault-managed. |
 | **5. Land aura-report-website (BFF)** | ✅ Done (dev + prod) | Secrets still imperative — migration to Vault pending. |
 | **6. Public-gateway refactor + public ingress** | ✅ Done | Shared `public-gateway` on `*.auraenterprise.solutions` + Cloudflare Tunnel (in-cluster `cloudflared`). Different from original plan (no dnsmasq + `*.lab.lan`). |
@@ -379,7 +383,7 @@ Three reasonable ways to land this. Recommendation first.
 
 ## 12. Open questions / TODOs
 
-1. **SpiceDB image tag** — pending. Pin a specific version from `authzed/spicedb` releases before the SpiceDB Deployment lands.
+1. **SpiceDB image tag + operator install method** — pending. Decide: pin operator bundle URL (`bundle.yaml` from a specific release) vs the upstream Helm chart in `authzed/spicedb-operator/charts/spicedb-operator`. Image tag for the SpiceDB pods themselves is set via `SpiceDBCluster.spec.version` (channel-driven, but pinning is supported).
 2. **AWS S3 bucket per env** — overlays currently use `aura-dev` / `aura-prod` patches per `AWS_S3_BUCKET_NAME`. Confirm the bucket names match what's provisioned in AWS.
 3. **Mobile client API endpoint** — `api-dev.auraenterprise.solutions` and `api.auraenterprise.solutions` VirtualServices are in place. Confirm `report-mobile` actually hits these vs. going via the BFF.
 4. **Email enabled** — `MAIL_PASSWORD` is currently a Gmail app password in `report-ms-secrets`. Decide whether SMTP via personal Gmail is right long-term or move to SES.
@@ -391,7 +395,7 @@ Three reasonable ways to land this. Recommendation first.
 
 ## 13. Summary — what landed
 
-- **3 of 4 app trees** built: `keycloak`, `report-ms`, `aura-report-website` (dev + prod each). SpiceDB still pending.
+- **3 of 4 app trees** built: `keycloak`, `report-ms`, `aura-report-website` (dev + prod each). SpiceDB still pending — operator pivot (2026-06-07) cleared the previous CNPG-backed scaffold; `core/spicedb-operator/` + `apps/spicedb/` are the next thing to scaffold.
 - **Public ingress**: Cloudflare Tunnel (in-cluster `cloudflared`) + shared Istio `public-gateway` on `*.auraenterprise.solutions`. Single wildcard rule in Cloudflare; all routing is Istio VirtualServices.
 - **ECR credential rotator**: `core/ecr-rotator/` CronJob (8h schedule) refreshes the `ecr-pull` Secret across `apps-*`.
 - **Secrets**: HashiCorp Vault (self-hosted, single-node Raft, Shamir seal) + Vault Secrets Operator. `report-ms` migrated as PoC. `bff-secrets` + `keycloak-admin-secret` migrations pending — same per-app pattern.

@@ -39,7 +39,7 @@ The Istio gateway listens on `*.auraenterprise.solutions` (shared `public-gatewa
 | **report-ms** (Java backend)  | `api-dev.auraenterprise.solutions` ✅ | `api-staging.auraenterprise.solutions` ❌  | `api.auraenterprise.solutions` ✅       | dev + prod deployed; needs `ecr-pull` + `report-ms-secrets`; staging not deployed |
 | **Keycloak** (public OIDC)    | `accounts-dev.auraenterprise.solutions` ✅ | `accounts-staging.auraenterprise.solutions` ❌ | `accounts.auraenterprise.solutions` ✅ | dev + prod deployed; staging not deployed |
 | **Keycloak** (admin console)  | `admin-accounts-dev.auraenterprise.solutions` ✅ | `admin-accounts-staging.auraenterprise.solutions` ❌ | `admin-accounts.auraenterprise.solutions` ✅ | dev + prod deployed; staging not deployed |
-| **SpiceDB** (gRPC, internal)  | n/a                                         | n/a                                              | n/a                                     | not deployed |
+| **SpiceDB** (gRPC, internal)  | n/a                                         | n/a                                              | n/a                                     | operator-pending — will be re-introduced via [`spicedb-operator`](https://authzed.com/docs/spicedb/ops/operator) |
 
 ### Cloudflare Tunnel (public ingress)
 
@@ -58,10 +58,9 @@ App-to-app calls inside the mesh use cluster DNS — short form within the same 
 | BFF                  | `http://aura-report-website:3000`                 | `http://aura-report-website.apps-<env>.svc:3000`  |
 | report-ms (HTTP/GraphQL) | `http://report-ms:8080`                       | `http://report-ms.apps-<env>.svc:8080`            |
 | Keycloak             | `http://keycloak:8080`                            | `http://keycloak.apps-<env>.svc:8080`             |
-| SpiceDB (gRPC)       | `spicedb:50051`                                   | `spicedb.apps-<env>.svc:50051`                    |
+| SpiceDB (gRPC)       | `dev-spicedb:50051` (operator-pending)            | `dev-spicedb.apps-<env>.svc:50051` (operator-pending) |
 | postgres-aura (rw)   | `postgres-aura-rw:5432`                           | `postgres-aura-rw.apps-<env>.svc:5432`            |
 | postgres-keycloak (rw) | `postgres-keycloak-rw:5432`                     | `postgres-keycloak-rw.apps-<env>.svc:5432`        |
-| postgres-spicedb (rw) | `postgres-spicedb-rw:5432`                       | `postgres-spicedb-rw.apps-<env>.svc:5432`         |
 
 ### Port-forward (poking from your laptop until routing is up)
 
@@ -88,7 +87,7 @@ kubectl -n apps-dev port-forward svc/postgres-aura-rw 5432:5432
 | Service                     | User    | Password source                                                                                                       |
 | :-------------------------- | :------ | :-------------------------------------------------------------------------------------------------------------------- |
 | Keycloak admin console (all envs) | `admin` | base-encoded `admin` in `apps/keycloak/base/admin-secret.yaml` — **rotate via the Keycloak admin console after first login** |
-| Postgres app users (all DBs / envs) | `<dbname>` (e.g. `aura`, `keycloak`, `spicedb`) | CNPG-generated `postgres-<db>-app` Secret in `apps-<env>`. Key: `password`. |
+| Postgres app users (all DBs / envs) | `<dbname>` (e.g. `aura`, `keycloak`) | CNPG-generated `postgres-<db>-app` Secret in `apps-<env>`. Key: `password`. |
 
 ## Layout
 
@@ -112,8 +111,8 @@ bootstrap/
     ├── apps-project.yaml            # AppProject + apps-{dev,staging,prod} ns (wave 6)
     ├── cloudnative-pg.yaml          # CNPG operator                 (sync-wave 6)
     ├── ecr-rotator.yaml             # ECR pull-cred CronJob         (sync-wave 6)
-    ├── postgres-<db>-<env>.yaml     # 3 databases × 3 envs = 9 Apps (sync-wave 7)
-    │                                # db ∈ {aura, keycloak, spicedb}
+    ├── postgres-<db>-<env>.yaml     # 2 databases × 3 envs = 6 Apps (sync-wave 7)
+    │                                # db ∈ {aura, keycloak}
     │                                # env ∈ {dev, staging, prod}
     ├── keycloak-{dev,prod}.yaml     # IdP                           (sync-wave 8)
     ├── report-ms-{dev,prod}.yaml    # Java backend                  (sync-wave 9)
@@ -140,9 +139,6 @@ apps/                                # application workloads (DRY tree, hydrated
 │   └── overlays/{dev,staging,prod}/ # per-env storage / replica patches
 ├── postgres-keycloak/               # identity provider DB
 │   ├── base/                        # name: postgres-keycloak, db: keycloak
-│   └── overlays/{dev,staging,prod}/
-├── postgres-spicedb/                # authorization (Zanzibar) DB
-│   ├── base/                        # name: postgres-spicedb, db: spicedb
 │   └── overlays/{dev,staging,prod}/
 ├── keycloak/                        # IdP
 │   ├── base/                        # Deployment + Service + admin Secret + realm.json
@@ -195,9 +191,9 @@ Waves in this repo:
 | `5`  | `kiali`, `vault`, `vault-routing`, `vault-secrets-operator` | Service mesh dashboard; HashiCorp Vault (single-node Raft, manual Shamir unseal); Vault `VirtualService`; Vault Secrets Operator. No deps between them — all install in parallel. VSO will retry connecting to Vault until you finish the manual unseal. |
 | `6`  | `vault-config` (plus the existing wave-6 set below) | `VaultConnection` default + `vault-auth-delegator` SA. VSO's CRDs must exist (wave 5 completes) before the `VaultConnection` resource is valid. |
 | `6`  | `apps-project`, `cloudnative-pg`, `ecr-rotator`, `vault-config` | AppProject `apps` + 3 env namespaces, CNPG operator, the ECR pull-cred rotator, and the Vault auth-delegator + default `VaultConnection`. All install in parallel. Workloads in wave 7+ depend on namespaces + CNPG + `ecr-pull` Secret. |
-| `7`  | `postgres-{aura,keycloak,spicedb}-{dev,staging,prod}` | Nine `Cluster` CRs — 3 databases × 3 envs. Each materialized via Source Hydrator from `apps/postgres-<db>/overlays/<env>` → `environments/<env>` branches. |
+| `7`  | `postgres-{aura,keycloak}-{dev,staging,prod}` | Six `Cluster` CRs — 2 databases × 3 envs. Each materialized via Source Hydrator from `apps/postgres-<db>/overlays/<env>` → `environments/<env>` branches. SpiceDB's datastore will land alongside the operator (see backlog). |
 | `8`  | `keycloak-{dev,prod}` | IdP — needs `postgres-keycloak` (wave 7). |
-| `9`  | `report-ms-{dev,prod}` | Java backend — needs `postgres-aura` (wave 7) for JDBC + Keycloak (wave 8) for OIDC. Reaches SpiceDB at `spicedb:50051` when that lands. |
+| `9`  | `report-ms-{dev,prod}` | Java backend — needs `postgres-aura` (wave 7) for JDBC + Keycloak (wave 8) for OIDC. Reaches SpiceDB at `<name>-spicedb:50051` (operator-managed Service) once the `spicedb-operator` stack lands. |
 | `10` | `aura-report-website-{dev,prod}` | Next.js BFF — proxies report-ms and redirects browsers to Keycloak's public hostname. |
 
 Two things to remember:
@@ -452,7 +448,6 @@ kubectl -n argocd get applications
 #   apps-project, cloudnative-pg, ecr-rotator, vault-config
 #   postgres-aura-{dev,staging,prod}
 #   postgres-keycloak-{dev,staging,prod}
-#   postgres-spicedb-{dev,staging,prod}
 #   keycloak-{dev,prod}
 #   report-ms-{dev,prod}
 #   aura-report-website-{dev,prod}
@@ -523,11 +518,11 @@ Adding `grafana.auraenterprise.solutions` and `kiali.auraenterprise.solutions` `
 
 ## Managing secrets
 
-Application secrets live in **HashiCorp Vault**, self-hosted in-cluster (`core/vault/`). The Vault Secrets Operator (VSO) — coming in a follow-up commit — watches `VaultStaticSecret` CRDs in each `apps-<env>` namespace and materializes normal `Secret` resources, which pods consume via `envFrom`. Until VSO + per-app migration land, the existing imperative `kubectl create secret` blocks still apply.
+Application secrets live in **HashiCorp Vault**, self-hosted in-cluster (`core/vault/`). The **Vault Secrets Operator (VSO)** watches `VaultStaticSecret` CRDs in each `apps-<env>` namespace and materializes normal K8s `Secret` resources, which pods consume via `envFrom`. Pods never talk to Vault directly; they only ever see plain `Secret`s. Rotation = update the value in Vault → VSO picks it up within 60s → `rolloutRestartTargets` triggers a Deployment rollout.
 
 ```
 You:    vault kv put aura/dev/report-ms KEYCLOAK_CLIENT_SECRET=... MAIL_PASSWORD=...
-        # via UI (port-forward only) or `vault` CLI inside the pod
+        # via UI at http://localhost:8200 (port-forward) or `vault` CLI inline
 
 Vault:  encrypted at rest on /vault/data (Raft storage), sealed/unsealed via
         Shamir's secret sharing (5 keys, 3 needed to unseal)
@@ -539,6 +534,69 @@ VSO:    watches a VaultStaticSecret CRD in apps-<env>; reads Vault as the
 
 App:    consumes the Secret via envFrom — identical Deployment YAML to today
 ```
+
+### Accessing the Vault UI
+
+Vault is intentionally **not** exposed via Cloudflare Tunnel — root token leak = every app secret leaked. Reach the UI by port-forwarding:
+
+```bash
+kubectl -n vault port-forward svc/vault 8200:8200
+# Open http://localhost:8200
+```
+
+Sign in with the root token from `vault operator init` (Method: **Token**, paste into the **Token** field). Once you're in:
+
+| Task | Where |
+| :--- | :--- |
+| Browse / write / edit secrets | **Secrets** → click the mount (e.g. `aura/`) → navigate by path |
+| Create or edit a role binding (K8s SA → Vault policy) | **Access** → **Auth Methods** → click `kubernetes/` → **Roles** tab |
+| Create or edit a policy | **Policies** → click policy → **Edit** (or **Create ACL policy**) |
+| See a secret's version history | **Secrets** → click path → **Version History** tab (KV-v2 keeps versions for free) |
+| Generate a non-root token for daily use | **Access** → **Tokens** → **Create token** with TTL + policies (don't keep using the root token after initial setup) |
+
+The UI and the `vault` CLI write to the same backends — anything you create one way is visible the other. For one-off edits, the UI is faster; for bulk operations (10 secrets, 10 roles), the CLI scripts cleanly. Both work indefinitely.
+
+### How the chain works end-to-end
+
+For a single `bff-secrets` Secret to materialize in `apps-dev`, **four** independent things must exist. Missing any one and VSO silently retries forever without surfacing a useful error:
+
+```
+1. Vault KV data      aura/dev/bff = { AUTH_SECRET: ..., KEYCLOAK_CLIENT_SECRET: ... }
+                      ▲
+                      │ readable through the policy
+                      │
+2. Vault role         aura-report-website-dev:
+                        bound_service_account_names      = aura-report-website
+                        bound_service_account_namespaces = apps-dev
+                        policies                         = aura-app-reader
+                        audience                         = vault
+                      ▲
+                      │ matches the SA presenting a JWT to Vault
+                      │
+3. K8s ServiceAccount aura-report-website  (in apps-dev, declared in apps/<svc>/base/)
+                      ▲
+                      │ referenced by VaultAuth's spec.kubernetes.serviceAccount
+                      │
+4. CRDs in apps-dev   VaultAuth:           { role: aura-report-website-dev, sa: aura-report-website }
+                      VaultStaticSecret:   { vaultAuthRef: aura-report-website,
+                                             mount: aura, path: dev/bff,
+                                             destination: { name: bff-secrets, create: true } }
+                      ▲
+                      │
+5. Deployment         envFrom: secretRef: { name: bff-secrets }
+                      ↑↑↑ pod consumes the materialized Secret normally
+```
+
+**Pieces 1, 2 land in Vault (UI or CLI).** Pieces 3 and 4 land in gitops via `apps/<svc>/`. Piece 5 already exists from when the Deployment was scaffolded.
+
+What each piece is for:
+- **Vault KV data**: the actual key/value pairs you want to expose.
+- **Vault role**: the gate — "any pod presenting a token from SA `X` in namespace `Y` gets policy `Z`."
+- **K8s SA**: the identity. K8s mints short-lived JWTs for it on demand (TokenRequest API).
+- **VaultAuth CRD**: tells VSO how to authenticate to Vault for resources in this namespace (which auth method, which SA, which role).
+- **VaultStaticSecret CRD**: tells VSO what to read and where to write the materialized Secret.
+
+Same chain for every app. The base policy `aura-app-reader` (created during the one-time Vault config) allows reading anything under `aura/data/<env>/*`, so adding a new app only needs steps 1, 2, 3, 4 — never a new policy.
 
 ### ECR pull credentials (the one secret Vault doesn't manage)
 
@@ -691,82 +749,105 @@ unset ROOT_TOKEN TOKEN_REVIEW_JWT
 
 Per-app role bindings (which K8s ServiceAccount → which Vault policy) come in **commit 3** alongside the first app migration, because the role names need to match what the per-app `VaultAuth` CRD references.
 
-### Per-app migration runbook (PoC: report-ms)
+### Per-app migration runbook
 
-Three things have to be in place: the secret values in Vault, a Vault role binding the K8s SA → policy, and the CRDs in the app namespace. The CRDs land via gitops; the Vault state is imperative (one-shot per app+env).
+Concretely, to migrate any imperative `kubectl create secret` to Vault, you do four things — refer to [How the chain works end-to-end](#how-the-chain-works-end-to-end) for the why.
+
+| # | Action | Where |
+| :-: | :--- | :--- |
+| 1 | Write the secret values to Vault at `aura/<env>/<svc>` | Vault UI or CLI — see [Writing secrets](#writing-secrets-to-vault-ui-and-cli) |
+| 2 | Create a Vault role `<svc>-<env>` binding the K8s SA → `aura-app-reader` policy | Vault UI or CLI — see [Creating a Vault role](#creating-a-vault-role-ui-and-cli) |
+| 3 | Add `serviceaccount.yaml` to `apps/<svc>/base/` + `serviceAccountName` to the Deployment | gitops (kustomize) |
+| 4 | Add `vaultauth.yaml` + `vaultstaticsecret.yaml` to each `apps/<svc>/overlays/<env>/` and list them in the overlay's `kustomization.yaml` resources | gitops (kustomize) |
+
+`report-ms` and `aura-report-website` already follow this pattern — read either one as a working template. After step 4 lands and ArgoCD syncs, VSO materializes the Secret within ~60s. If `Status.Available=False` on the `VaultStaticSecret`, the error is one of: secret not in Vault, role not in Vault, role bound to the wrong SA/namespace, audience mismatch.
+
+### Writing secrets to Vault (UI and CLI)
+
+**UI path:**
+
+1. Open the Vault UI (`kubectl -n vault port-forward svc/vault 8200:8200` → `http://localhost:8200`, log in with root token).
+2. **Secrets** → click `aura/` (the KV-v2 mount).
+3. **Create secret** (top right).
+4. **Path for this secret**: `dev/<svc>` (or `prod/<svc>` etc.) — matches what your `VaultStaticSecret`'s `spec.path` says.
+5. Add each key/value pair in the form. Keys become env var names when VSO materializes the Secret.
+6. **Save**.
+
+Editing an existing secret is the same flow — KV-v2 keeps every prior version automatically; you can roll back via the **Version History** tab.
+
+**CLI path (scriptable):**
 
 ```bash
 export ROOT_TOKEN="hvs.PASTE_YOUR_ROOT_TOKEN_HERE"
 
-# 1. Write secrets into Vault under aura/<env>/report-ms (KV-v2)
 kubectl -n vault exec -i vault-0 -- env VAULT_TOKEN="$ROOT_TOKEN" \
-  vault kv put aura/dev/report-ms \
-    KEYCLOAK_CLIENT_SECRET='REPLACE_ME' \
-    KEYCLOAK_CLIENT_UUID='d388a85a-26ed-48e1-a9a4-57b87c77dc61' \
-    SPICEDB_PRESHARED_KEY='dev-secret-key' \
-    AWS_ACCESS_KEY='REPLACE_ME' \
-    AWS_SECRET_ACCESS_KEY='REPLACE_ME' \
-    MAIL_PASSWORD='REPLACE_ME_GMAIL_APP_PASSWORD'
+  vault kv put aura/dev/<svc> \
+    KEY1='value1' \
+    KEY2='value2'
+
+unset ROOT_TOKEN
+```
+
+### Creating a Vault role (UI and CLI)
+
+The role is what tells Vault "a JWT from K8s ServiceAccount `<sa>` in namespace `<ns>` gets policy `<policy>`." One role per app per env.
+
+**UI path:**
+
+1. **Access** (left nav) → **Auth Methods** → click `kubernetes/`.
+2. **Roles** tab → **Create role** (top right).
+3. Fill in (example for `aura-report-website` in dev):
+   - **Name**: `aura-report-website-dev`
+   - **Bound service account names**: `aura-report-website`
+   - **Bound service account namespaces**: `apps-dev`
+   - **Generated token's policies**: `aura-app-reader`
+   - **Audience**: `vault`
+   - **Token TTL**: `24h` (or leave the default)
+4. **Save**.
+
+Repeat for prod: same form, change `Name` to `aura-report-website-prod` and `Bound service account namespaces` to `apps-prod`. The `Audience: vault` must match what the `VaultAuth` CRD requests — without it, VSO presents a JWT with `aud=vault` and Vault rejects it.
+
+**CLI path:**
+
+```bash
+export ROOT_TOKEN="hvs.PASTE_YOUR_ROOT_TOKEN_HERE"
 
 kubectl -n vault exec -i vault-0 -- env VAULT_TOKEN="$ROOT_TOKEN" \
-  vault kv put aura/prod/report-ms \
-    KEYCLOAK_CLIENT_SECRET='REPLACE_ME_PROD' \
-    KEYCLOAK_CLIENT_UUID='d388a85a-26ed-48e1-a9a4-57b87c77dc61' \
-    SPICEDB_PRESHARED_KEY='REPLACE_ME_PROD' \
-    AWS_ACCESS_KEY='REPLACE_ME_PROD' \
-    AWS_SECRET_ACCESS_KEY='REPLACE_ME_PROD' \
-    MAIL_PASSWORD='REPLACE_ME_PROD'
-
-# 2. Create per-env Vault role: binds the report-ms SA in apps-<env> to the
-#    aura-app-reader policy. The role name has to match what VaultAuth references.
-kubectl -n vault exec -i vault-0 -- env VAULT_TOKEN="$ROOT_TOKEN" \
-  vault write auth/kubernetes/role/report-ms-dev \
-    bound_service_account_names=report-ms \
+  vault write auth/kubernetes/role/<svc>-dev \
+    bound_service_account_names=<svc-sa> \
     bound_service_account_namespaces=apps-dev \
     policies=aura-app-reader \
     audience=vault \
     ttl=24h
 
-kubectl -n vault exec -i vault-0 -- env VAULT_TOKEN="$ROOT_TOKEN" \
-  vault write auth/kubernetes/role/report-ms-prod \
-    bound_service_account_names=report-ms \
-    bound_service_account_namespaces=apps-prod \
-    policies=aura-app-reader \
-    audience=vault \
-    ttl=24h
+# repeat with -prod suffix + apps-prod namespace
 
 unset ROOT_TOKEN
-
-# 3. Push the gitops change (SA + VaultAuth + VaultStaticSecret CRDs)
-cd ~/gitops   # or wherever you keep the repo
-git add apps/report-ms README.md
-git commit -m "feat(report-ms): migrate secrets to Vault via VSO"
-git push
-
-# 4. Wait for hydrator + ArgoCD; verify VSO materialized the Secret
-kubectl -n apps-dev get vaultstaticsecret report-ms-secrets
-# Expect: Status.Conditions includes type=Available, status=True
-kubectl -n apps-dev get secret report-ms-secrets
-# Expect: Type Opaque with the 6 data keys
-
-# 5. Delete the old imperative Secret. (VSO would overwrite anyway, but this
-#    is the moment you can prove the imperative one is gone for good.)
-# Actually — VSO created the Secret with the same name, so step 4's `get` is
-# already showing VSO's output. No explicit delete needed if you're seeing
-# fresh data from step 4. If you ran `kubectl create secret ...` and VSO has
-# never claimed it (Status.Available=False), delete + let VSO retry:
-#   kubectl -n apps-dev delete secret report-ms-secrets
-#   kubectl -n apps-dev annotate vaultstaticsecret report-ms-secrets \
-#     secrets.hashicorp.com/restart=$(date +%s) --overwrite
 ```
 
-Once VSO is healthy on report-ms, repeat for `bff-secrets` and `keycloak-admin-secret` (same pattern: new SA + VaultAuth + VaultStaticSecret + per-env Vault role + write secrets to Vault).
+### Verifying the materialized Secret
+
+After steps 1–4 of the migration:
+
+```bash
+kubectl -n apps-dev get vaultstaticsecret <svc>-secrets
+# Status.Conditions includes type=Available, status=True (within ~60s)
+kubectl -n apps-dev get secret <svc>-secrets
+# Type Opaque with your keys
+
+# If you had an old imperative Secret with the same name, VSO took over —
+# nothing to clean up. If VSO's Status.Available stays False, the imperative
+# Secret is blocking it; delete to let VSO recreate:
+#   kubectl -n apps-dev delete secret <svc>-secrets
+#   kubectl -n apps-dev annotate vaultstaticsecret <svc>-secrets \
+#     secrets.hashicorp.com/restart=$(date +%s) --overwrite
+```
 
 ### Bootstrap that stays imperative
 
 - The 5 unseal keys + root token (kept in your password manager — by design, can't be in git).
-- The one-time Vault config block above — `vault auth enable kubernetes` + `vault write auth/kubernetes/config` + `vault secrets enable -path=aura kv-v2` + policies. Could be Terraformed with `hashicorp/vault` provider when this grows; one-shot CLI is fine for now.
-- Per-app Vault roles created in commit 3 — `vault write auth/kubernetes/role/...`. Same idea: imperative, or Terraform later.
+- The one-time Vault config block above — `vault auth enable kubernetes` + `vault write auth/kubernetes/config` + `vault secrets enable -path=aura kv-v2` + base policy. Could be Terraformed with `hashicorp/vault` provider when this grows; one-shot via UI or CLI is fine for now.
+- Per-app secrets and Vault roles — done via UI (recommended) or CLI per [Writing secrets](#writing-secrets-to-vault-ui-and-cli) and [Creating a Vault role](#creating-a-vault-role-ui-and-cli). Imperative until we add Terraform/`vault` provider.
 
 Everything else lands via GitOps.
 
@@ -850,6 +931,29 @@ In-cluster `cloudflared` Deployment connects outbound to Cloudflare; routes publ
 
 The bootstrap is idempotent. Re-run steps 3 → 6 above against a fresh cluster. The `argocd` Application is annotated `sync-wave: -10` so it reconciles before everything else.
 
+## Known issues
+
+Recurring sharp edges that aren't bugs in this repo but cost time to rediscover. Add new entries as you hit them.
+
+### VSO returns 403 `permission denied` after a Vault role/policy change
+
+**Symptom.** A `VaultStaticSecret`'s events show `Failed to read Vault secret: ... Code: 403. permission denied` even though `vault read auth/kubernetes/role/<role>` confirms the role has the right `token_policies` and `vault policy read <policy>` shows the right paths.
+
+**Cause.** When VSO logs in via the Kubernetes auth method, Vault mints a token whose policies are **frozen at issuance**. Editing the role's policies afterwards does not back-propagate to existing tokens — VSO keeps using the cached one until it expires (default `token_ttl: 24h`). All subsequent reads use the old, under-privileged token, hence the 403.
+
+**Fix.** Restart VSO so it does a fresh login with the now-correct role:
+
+```bash
+kubectl -n vault-secrets-operator-system rollout restart deploy
+kubectl -n vault-secrets-operator-system rollout status deploy --timeout=60s
+
+# Then kick the VaultStaticSecret to re-read immediately instead of waiting on refreshAfter:
+kubectl -n <ns> annotate vaultstaticsecret <name> \
+  secrets.hashicorp.com/restart=$(date +%s) --overwrite
+```
+
+**Avoid in future.** Either restart VSO right after any `auth/kubernetes/role/...` edit, or use a low `token_ttl` (e.g. `1h`) so stale tokens self-heal — at the cost of more Vault login traffic.
+
 ## Backlog
 
 - [x] ~~**ECR pull-credential rotator**~~ — landed at `core/ecr-rotator/`. Single CronJob in `ecr-rotator` ns, ServiceAccount with per-namespace `Role`+`RoleBinding` in each `apps-<env>`, runs every 8h. Bootstrap = one imperative `aws-credentials` Secret + one `kubectl create job --from=cronjob/...`.
@@ -865,5 +969,6 @@ The bootstrap is idempotent. Re-run steps 3 → 6 above against a fresh cluster.
 - [ ] **Tracing** — Tempo (or Jaeger), wired into Kiali's `external_services.tracing`.
 - [x] ~~**Source Hydrator enablement**~~ — landed with Postgres (`apps/postgres/overlays/<env>` → `environments/<env>` branches). Spec is `spec.sourceHydrator` on every app Application; see Concepts.
 - [ ] **CNPG backups** — `Cluster.spec.backup` to S3/MinIO with PITR. Required before any real prod use. Currently marked `# TODO` in `apps/postgres/overlays/prod/kustomization.yaml`.
-- [ ] **Postgres connection from app pods** — each cluster auto-generates `postgres-<db>-app` Secret per env (so `postgres-aura-app`, `postgres-keycloak-app`, `postgres-spicedb-app` in each `apps-<env>` namespace). App workloads consume it via env vars or projected files.
+- [ ] **Postgres connection from app pods** — each cluster auto-generates `postgres-<db>-app` Secret per env (so `postgres-aura-app`, `postgres-keycloak-app` in each `apps-<env>` namespace). App workloads consume it via env vars or projected files.
+- [ ] **SpiceDB via [`spicedb-operator`](https://authzed.com/docs/spicedb/ops/operator)** — install the cluster-scoped operator at sync-wave 5 alongside the rest of the platform operators (`core/spicedb-operator/`, manifest bundle from upstream releases). Per-env `SpiceDBCluster` CRs land at sync-wave 8 (`apps/spicedb/overlays/<env>/`), each with a Vault-sourced `Secret` carrying `preshared_key` + `datastore_uri`. The datastore engine choice (memory for dev, postgres-CNPG for staging/prod) is open — pick before scaffolding `apps/spicedb/`.
 - [ ] **ApplicationSet refactor** — at 9 Postgres Applications, the duplication in `bootstrap/apps/postgres-*.yaml` is real. A matrix generator over `(db, env)` would collapse all 9 into a single ApplicationSet. Defer until Source Hydrator's behavior is settled (don't compound two alpha-adjacent features).
