@@ -5,6 +5,6 @@ To hydrate the manifests in this repository, run the following commands:
 ```shell
 git clone https://github.com/AuraAITools/gitops.git
 # cd into the cloned directory
-git checkout be68fed8669b04aa623b7ed77a825f832df1d1fe
+git checkout 9bbcc439474f28d6f4f385f85d9337d5ceaaf837
 kustomize build ./apps/keycloak/overlays/dev
 ```

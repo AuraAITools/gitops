@@ -1,9 +1,15 @@
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aura-report-website
+  namespace: apps-dev
+---
+apiVersion: v1
 data:
   KEYCLOAK_CLIENT_ID: aura-application-client
-  KEYCLOAK_ISSUER: http://accounts-dev.lab.lan/realms/aura
-  NEXT_PUBLIC_REPORT_SERVICE_URL: http://api-dev.lab.lan
-  NEXTAUTH_URL: http://app-dev.lab.lan
+  KEYCLOAK_ISSUER: https://accounts-dev.auraenterprise.solutions/realms/aura
+  NEXT_PUBLIC_REPORT_SERVICE_URL: https://api-dev.auraenterprise.solutions
+  NEXTAUTH_URL: https://app-dev.auraenterprise.solutions
   NODE_ENV: production
 kind: ConfigMap
 metadata:
@@ -79,6 +85,7 @@ spec:
               memory: 100Mi
       imagePullSecrets:
         - name: ecr-pull
+      serviceAccountName: aura-report-website
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService
@@ -89,10 +96,42 @@ spec:
   gateways:
     - istio-ingress/public-gateway
   hosts:
-    - app-dev.lab.lan
+    - app-dev.auraenterprise.solutions
   http:
     - route:
         - destination:
             host: aura-report-website.apps-dev.svc.cluster.local
             port:
               number: 3000
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: aura-report-website
+  namespace: apps-dev
+spec:
+  kubernetes:
+    audiences:
+      - vault
+    role: aura-report-website-dev
+    serviceAccount: aura-report-website
+  method: kubernetes
+  mount: kubernetes
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: bff-secrets
+  namespace: apps-dev
+spec:
+  destination:
+    create: true
+    name: bff-secrets
+  mount: aura
+  path: dev/bff
+  refreshAfter: 60s
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: aura-report-website
+  type: kv-v2
+  vaultAuthRef: aura-report-website

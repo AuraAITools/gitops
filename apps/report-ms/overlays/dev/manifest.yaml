@@ -1,4 +1,10 @@
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: report-ms
+  namespace: apps-dev
+---
+apiVersion: v1
 data:
   AURA_EMAIL_FROM_ADDRESS: kevinliusingapore@gmail.com
   AWS_REGION: ap-southeast-1
@@ -100,6 +106,7 @@ spec:
               memory: 500Mi
       imagePullSecrets:
         - name: ecr-pull
+      serviceAccountName: report-ms
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService
@@ -110,10 +117,42 @@ spec:
   gateways:
     - istio-ingress/public-gateway
   hosts:
-    - api-dev.lab.lan
+    - api-dev.auraenterprise.solutions
   http:
     - route:
         - destination:
             host: report-ms.apps-dev.svc.cluster.local
             port:
               number: 8080
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: report-ms
+  namespace: apps-dev
+spec:
+  kubernetes:
+    audiences:
+      - vault
+    role: report-ms-dev
+    serviceAccount: report-ms
+  method: kubernetes
+  mount: kubernetes
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: report-ms-secrets
+  namespace: apps-dev
+spec:
+  destination:
+    create: true
+    name: report-ms-secrets
+  mount: aura
+  path: dev/report-ms
+  refreshAfter: 60s
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: report-ms
+  type: kv-v2
+  vaultAuthRef: report-ms

@@ -1199,7 +1199,8 @@ data:
           "clientAuthenticatorType": "client-secret",
           "secret": "**********",
           "redirectUris": [
-            "https://accounts.auratest.dev",
+            "https://accounts.auraenterprise.solutions",
+            "https://accounts-dev.auraenterprise.solutions",
             "http://localhost:3000/api/auth/callback/keycloak",
             "aura-report://auth/callback",
             "http://localhost:3000/auth/new-user",
@@ -2996,9 +2997,9 @@ spec:
             - name: KC_HEALTH_ENABLED
               value: "true"
             - name: KC_HOSTNAME
-              value: http://accounts-dev.lab.lan
+              value: https://accounts-dev.auraenterprise.solutions
             - name: KC_HOSTNAME_ADMIN
-              value: http://admin-accounts-dev.lab.lan
+              value: https://admin-accounts-dev.auraenterprise.solutions
           envFrom:
             - secretRef:
                 name: keycloak-admin-secret
@@ -3040,8 +3041,8 @@ spec:
   gateways:
     - istio-ingress/public-gateway
   hosts:
-    - accounts-dev.lab.lan
-    - admin-accounts-dev.lab.lan
+    - accounts-dev.auraenterprise.solutions
+    - admin-accounts-dev.auraenterprise.solutions
   http:
     - route:
         - destination:

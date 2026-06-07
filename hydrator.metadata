@@ -1,7 +1,7 @@
 {
   "repoURL": "https://github.com/AuraAITools/gitops.git",
-  "drySha": "1a47599ac49ffd49aa0814d7ec713229d5ff12b9",
+  "drySha": "9bbcc439474f28d6f4f385f85d9337d5ceaaf837",
   "author": "kevin-otter-liu <kevinliusingapore@gmail.com>",
-  "date": "2026-06-05T18:08:31Z",
-  "subject": "feat: aura-report-website (Next.js BFF) — Deployment + Service + ConfigMap + VS per env"
+  "date": "2026-06-07T07:55:10Z",
+  "subject": "feat(aura-report-website): migrate bff-secrets to Vault via VSO"
 }
