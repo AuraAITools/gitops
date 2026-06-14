@@ -1,16 +1,29 @@
-apiVersion: networking.istio.io/v1
-kind: VirtualService
-metadata:
-  name: kiali
-  namespace: kiali
-spec:
-  hosts:
-    - kiali.auraenterprise.solutions
-  gateways:
-    - istio-ingress/public-gateway
-  http:
-    - route:
-        - destination:
-            host: kiali.kiali.svc.cluster.local
-            port:
-              number: 20001
+# DISABLED — Kiali is currently configured with anonymous auth
+# (`auth.strategy: anonymous` in core/kiali/values.yaml). Exposing it via
+# Cloudflare Tunnel before a Cloudflare Access SSO policy is in place would
+# leak full cluster topology, container image tags, traffic graphs, and
+# Istio config to the internet.
+#
+# To re-enable: uncomment below, then (in this order, to avoid an open window)
+#   1. Create the Access application + SSO policy for
+#      kiali.auraenterprise.solutions in Cloudflare Zero Trust → Access.
+#   2. Add the Cloudflare Tunnel public-hostname rule pointing at
+#      istio-ingressgateway.istio-ingress.svc:80.
+#   3. Push this file uncommented so the VirtualService syncs.
+#
+# apiVersion: networking.istio.io/v1
+# kind: VirtualService
+# metadata:
+#   name: kiali
+#   namespace: kiali
+# spec:
+#   hosts:
+#     - kiali.auraenterprise.solutions
+#   gateways:
+#     - istio-ingress/public-gateway
+#   http:
+#     - route:
+#         - destination:
+#             host: kiali.kiali.svc.cluster.local
+#             port:
+#               number: 20001

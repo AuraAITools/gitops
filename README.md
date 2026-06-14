@@ -8,10 +8,12 @@ GitOps config repo for AuraAITools. ArgoCD reconciles every cluster from this re
 | :---------- | :---------------------------------------------------- | :----------------------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
 | **ArgoCD**  | https://argocd.auraenterprise.solutions †             | `kubectl -n argocd port-forward svc/argocd-server 8080:80` → http://localhost:8080   | Applications, sync status, sync history, drift, manual sync. Root-credential target — gate behind Cloudflare Access SSO. |
 | **Grafana** | https://grafana.auraenterprise.solutions †            | `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80` → http://localhost:3000 | Cluster + node metrics out of the box plus pod logs (via the Loki datasource — open **Explore**, pick **Loki**, query e.g. `{namespace="apps-dev"}`). Istio's canonical dashboards (Mesh / Service / Workload / Performance / Control Plane / Extension) appear under the **Istio** folder — pulled from `istio/istio@release-1.30` at helm-template time. |
-| **Kiali**   | https://kiali.auraenterprise.solutions †              | `kubectl -n kiali port-forward svc/kiali 20001:20001` → http://localhost:20001       | Service mesh topology, traffic graph, per-service request rate / error rate.   |
+| **Kiali**   | (port-forward only — VS commented out) ‡              | `kubectl -n kiali port-forward svc/kiali 20001:20001` → http://localhost:20001       | Service mesh topology, traffic graph, per-service request rate / error rate.   |
 | **Vault**   | (port-forward only — never expose)                    | `kubectl -n vault port-forward svc/vault 8200:8200` → http://localhost:8200          | KV secret store; **never** expose publicly — root token unlocks every app secret. See **Managing secrets**. |
 
 † VirtualService committed in this repo (`core/<svc>/routing/virtualservice.yaml`). The hostname only resolves publicly **after** you add the matching Cloudflare Tunnel ingress rule (Cloudflare dashboard → Zero Trust → Tunnels → public hostnames) AND attach a Cloudflare Access SSO policy. Without those, traffic still flows in-cluster but the hostname returns the tunnel's default 404 from the public internet.
+
+‡ Kiali's VirtualService is scaffolded at `core/kiali/routing/virtualservice.yaml` but **commented out** until a Cloudflare Access SSO policy is in place. Kiali is configured with `auth.strategy: anonymous`, so any public exposure without Access would leak full cluster topology, image tags, and Istio config. Uncomment + push only after the Cloudflare-side Access app exists.
 
 **Initial credentials** (rotate after first login):
 - ArgoCD: `admin` / `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`
@@ -555,7 +557,7 @@ What's disabled and why (in `core/monitoring/values.yaml`):
 Once the Cloudflare-side ingress + Access policy are in place:
 
 - **Grafana**: https://grafana.auraenterprise.solutions — metrics dashboards AND logs (Explore tab → Loki datasource, e.g. `{namespace="apps-dev"}` or `{app="report-ms"}`)
-- **Kiali**: https://kiali.auraenterprise.solutions — mesh topology
+- **Kiali**: port-forward only for now — VirtualService is scaffolded but commented out at `core/kiali/routing/virtualservice.yaml`. Uncomment + push once the Cloudflare Access SSO policy for `kiali.auraenterprise.solutions` is configured.
 
 Until then (or for local debugging):
 
@@ -1019,7 +1021,7 @@ kubectl -n <ns> annotate vaultstaticsecret <name> \
 - [ ] **Dynamic Vault secrets (Postgres + AWS STS)** — Vault's headline feature. Use the `database` engine to issue short-lived PG credentials per app, and the `aws` engine to mint STS tokens for the ECR rotator (replacing the static AWS access key). Far enough out that we don't need to plan it now.
 - [x] ~~**Secrets management strategy**~~ — chose Vault over SOPS+age for the long-term path. See [Managing secrets](#managing-secrets). Vault server lands at sync-wave 5; VSO + per-app migration are follow-up commits.
 - [x] ~~**Public ingress TLS**~~ — Cloudflare provides Universal SSL at the edge for all first-level subdomains of `auraenterprise.solutions`. cert-manager is not needed unless we move to in-cluster TLS later (e.g. for in-mesh STRICT mTLS — separate concern).
-- [x] ~~**Istio routing for Grafana + Kiali**~~ — VirtualServices landed at `core/monitoring/routing/` and `core/kiali/routing/`, wired via `bootstrap/apps/{grafana,kiali}-routing.yaml`. Still TODO: Cloudflare-side public-hostname ingress rules + Access SSO policies (manual, Cloudflare dashboard).
+- [~] **Istio routing for Grafana + Kiali** — Grafana VirtualService is live at `core/monitoring/routing/`. Kiali's is scaffolded at `core/kiali/routing/virtualservice.yaml` but commented out (Kiali runs `auth.strategy: anonymous` — would leak cluster topology without Cloudflare Access). Uncomment after the Cloudflare Access SSO policy for `kiali.auraenterprise.solutions` is in place.
 - [ ] **Cloudflare Access SSO policies for admin UIs** — add ingress rules in the Cloudflare Tunnel for `argocd.*`, `grafana.*`, `kiali.*`, and gate each behind an Access application (Zero Trust → Access → Applications) with GitHub or Google SSO. The Istio VirtualServices already exist; this is the Cloudflare-side half.
 - [x] ~~**`public-gateway` refactor**~~ — landed. One Gateway in `istio-ingress` listens on `*.auraenterprise.solutions`; per-service `VirtualService` lives with the app. Adding a new public host is now a VirtualService change (+ one Cloudflare ingress rule if not using the wildcard tunnel rule).
 - [ ] **Tracing** — Tempo (or Jaeger), wired into Kiali's `external_services.tracing`.
