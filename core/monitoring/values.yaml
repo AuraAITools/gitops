@@ -43,6 +43,17 @@ prometheus:
 grafana:
   adminPassword: admin   # rotate after first login
   defaultDashboardsTimezone: browser
+
+  # Register Loki alongside the chart-default Prometheus datasource so the
+  # Explore tab can query logs. Tempo gets added here in Phase 2.
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki-gateway.loki.svc.cluster.local
+      jsonData:
+        maxLines: 1000
+
   sidecar:
     dashboards:
       enabled: true

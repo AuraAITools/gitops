@@ -1,0 +1,84 @@
+# Grafana Alloy as a per-node log collector.
+# - DaemonSet, mounts the host's /var/log via the chart's default hostPath
+#   volumes (no extra RBAC needed — reads files, not the K8s log API).
+# - Discovers pods cluster-wide for label enrichment; local.file_match only
+#   picks up files actually present on this node, so per-node filtering is free.
+# - Parses the CRI log envelope, ships to loki-gateway.
+controller:
+  type: daemonset
+
+alloy:
+  configMap:
+    create: true
+    content: |-
+      // Discover every pod for label enrichment.
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // Build the log file path from pod UID + container name and attach
+      // useful labels (namespace, pod, container, app, node).
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+        // kubelet writes container stdout/stderr to
+        //   /var/log/pods/<namespace>_<pod>_<uid>/<container>/*.log
+        rule {
+          source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+          separator     = "/"
+          action        = "replace"
+          replacement   = "/var/log/pods/*$1/*.log"
+          target_label  = "__path__"
+        }
+      }
+
+      // Only files that physically exist on this node match — per-node
+      // filtering is implicit.
+      local.file_match "pod_logs" {
+        path_targets = discovery.relabel.pod_logs.output
+      }
+
+      loki.source.file "pod_logs" {
+        targets    = local.file_match.pod_logs.targets
+        forward_to = [loki.process.pod_logs.receiver]
+      }
+
+      // Strip the CRI envelope kubelet wraps each line in
+      // ("<timestamp> <stream> <flag> <log>") so Loki sees raw app output.
+      loki.process "pod_logs" {
+        forward_to = [loki.write.default.receiver]
+        stage.cri {}
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki-gateway.loki.svc.cluster.local/loki/api/v1/push"
+        }
+      }
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
