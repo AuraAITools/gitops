@@ -1,0 +1,16 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: kiali
+  namespace: kiali
+spec:
+  hosts:
+    - kiali.auraenterprise.solutions
+  gateways:
+    - istio-ingress/public-gateway
+  http:
+    - route:
+        - destination:
+            host: kiali.kiali.svc.cluster.local
+            port:
+              number: 20001

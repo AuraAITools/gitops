@@ -4,14 +4,14 @@ GitOps config repo for AuraAITools. ArgoCD reconciles every cluster from this re
 
 ## Dashboards
 
-| Dashboard   | URL (once routing is up) | Port-forward fallback                                                                | What it shows                                                                  |
-| :---------- | :----------------------- | :----------------------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
-| **ArgoCD**  | (port-forward only)      | `kubectl -n argocd port-forward svc/argocd-server 8080:80` → http://localhost:8080   | Applications, sync status, sync history, drift, manual sync. Not exposed via Cloudflare — root-level credential target; gate behind Cloudflare Access SSO if you want public access. |
-| **Grafana** | (port-forward only)      | `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80` → http://localhost:3000 | Cluster + node metrics out of the box. Istio's canonical dashboards (Mesh / Service / Workload / Performance / Control Plane / Extension) appear under the **Istio** folder — pulled from `istio/istio@release-1.30` at helm-template time. |
-| **Kiali**   | (port-forward only)      | `kubectl -n kiali port-forward svc/kiali 20001:20001` → http://localhost:20001       | Service mesh topology, traffic graph, per-service request rate / error rate.   |
-| **Vault**   | (port-forward only)      | `kubectl -n vault port-forward svc/vault 8200:8200` → http://localhost:8200          | KV secret store; never expose publicly — root token unlocks every app secret. See **Managing secrets**. |
+| Dashboard   | Public URL                                            | Port-forward fallback                                                                | What it shows                                                                  |
+| :---------- | :---------------------------------------------------- | :----------------------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
+| **ArgoCD**  | https://argocd.auraenterprise.solutions †             | `kubectl -n argocd port-forward svc/argocd-server 8080:80` → http://localhost:8080   | Applications, sync status, sync history, drift, manual sync. Root-credential target — gate behind Cloudflare Access SSO. |
+| **Grafana** | https://grafana.auraenterprise.solutions †            | `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80` → http://localhost:3000 | Cluster + node metrics out of the box plus pod logs (via the Loki datasource — open **Explore**, pick **Loki**, query e.g. `{namespace="apps-dev"}`). Istio's canonical dashboards (Mesh / Service / Workload / Performance / Control Plane / Extension) appear under the **Istio** folder — pulled from `istio/istio@release-1.30` at helm-template time. |
+| **Kiali**   | https://kiali.auraenterprise.solutions †              | `kubectl -n kiali port-forward svc/kiali 20001:20001` → http://localhost:20001       | Service mesh topology, traffic graph, per-service request rate / error rate.   |
+| **Vault**   | (port-forward only — never expose)                    | `kubectl -n vault port-forward svc/vault 8200:8200` → http://localhost:8200          | KV secret store; **never** expose publicly — root token unlocks every app secret. See **Managing secrets**. |
 
-⏳ = `VirtualService` not yet committed; see [Backlog](#backlog).
+† VirtualService committed in this repo (`core/<svc>/routing/virtualservice.yaml`). The hostname only resolves publicly **after** you add the matching Cloudflare Tunnel ingress rule (Cloudflare dashboard → Zero Trust → Tunnels → public hostnames) AND attach a Cloudflare Access SSO policy. Without those, traffic still flows in-cluster but the hostname returns the tunnel's default 404 from the public internet.
 
 **Initial credentials** (rotate after first login):
 - ArgoCD: `admin` / `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`
@@ -489,20 +489,75 @@ Rotate the admin password (`argocd account update-password`) or wire SSO, **then
 
 ## Observability
 
-Three things make up the stack:
+Following the three-pillar model (metrics / logs / traces). Metrics + logs are live; traces are next — see [`OBSERVABILITY_STRATEGY.md`](./OBSERVABILITY_STRATEGY.md) for the rationale and the full LGTM roadmap.
 
-| Piece                      | Source                                                                 |
-| :------------------------- | :--------------------------------------------------------------------- |
-| **Prometheus**             | from `kube-prometheus-stack` — scrapes envoy sidecars (`:15090 /stats/prometheus`) and istiod via `additionalPodMonitors` / `additionalServiceMonitors` in `core/monitoring/values.yaml`. |
-| **Grafana**                | also from `kube-prometheus-stack`; sidecar auto-loads any `ConfigMap` labeled `grafana_dashboard=1`. Istio's canonical dashboards are wired in via `grafana.dashboards.istio.*` in `core/monitoring/values.yaml` — the grafana subchart fetches the JSON at helm-template time and generates labeled ConfigMaps automatically, grouped under an **Istio** folder. |
-| **Kiali**                  | service mesh topology + dep graph; reads metrics from the same Prometheus. Auth set to `anonymous` for homelab — change before any shared env. |
+### Architecture
+
+```mermaid
+flowchart LR
+  subgraph pods["Workload pods · all namespaces"]
+    direction TB
+    app["App container<br/>stdout / stderr"]
+    envoy["Istio sidecar<br/>:15090 /stats/prometheus"]
+  end
+
+  subgraph collectors["Collectors"]
+    direction TB
+    alloy["Grafana Alloy<br/>DaemonSet · tails /var/log/pods<br/>strips CRI envelope<br/>attaches K8s labels"]
+    prom["Prometheus<br/>scrapes every 15s"]
+  end
+
+  subgraph backends["Backends"]
+    direction TB
+    loki[("Loki<br/>single-binary<br/>filesystem PVC · 7d retention")]
+    tsdb[("Prometheus TSDB<br/>24h retention")]
+    tempo[("Tempo<br/>traces · Phase 2")]
+  end
+
+  subgraph ui["Visualization · Grafana as single pane"]
+    direction TB
+    grafana["Grafana<br/>Explore + dashboards<br/>LogQL · PromQL · TraceQL"]
+    kiali["Kiali<br/>mesh topology"]
+  end
+
+  app -->|stdout| alloy
+  envoy -->|envoy metrics| prom
+
+  alloy -->|HTTP push to loki-gateway| loki
+  prom --> tsdb
+
+  loki -.->|Loki datasource| grafana
+  tsdb -.->|Prometheus datasource| grafana
+  tsdb --> kiali
+  tempo -.->|Tempo datasource · Phase 2| grafana
+
+  classDef phase2 stroke-dasharray:5 5,fill:#f5f5f5,color:#999
+  class tempo phase2
+```
+
+### Components
+
+| Piece                      | Pillar  | Source                                                                 |
+| :------------------------- | :------ | :--------------------------------------------------------------------- |
+| **Prometheus**             | metrics | from `kube-prometheus-stack` — scrapes envoy sidecars (`:15090 /stats/prometheus`) and istiod via `additionalPodMonitors` / `additionalServiceMonitors` in `core/monitoring/values.yaml`. |
+| **Grafana**                | UI      | also from `kube-prometheus-stack`; sidecar auto-loads any `ConfigMap` labeled `grafana_dashboard=1`. Istio's canonical dashboards are wired in via `grafana.dashboards.istio.*` in `core/monitoring/values.yaml` — the grafana subchart fetches the JSON at helm-template time and generates labeled ConfigMaps automatically, grouped under an **Istio** folder. Loki registered as an additional datasource via `grafana.additionalDataSources` (`http://loki-gateway.loki.svc.cluster.local`). |
+| **Loki**                   | logs    | `grafana/loki` chart `6.55.0`, **single-binary mode** — filesystem storage on the kind default StorageClass (`standard`/local-path), 10Gi PVC, 7d retention. Single-tenant (`auth_enabled: false`). Values in `core/loki/values.yaml`. |
+| **Alloy**                  | logs    | `grafana/alloy` chart `1.10.0`, **DaemonSet** — tails `/var/log/pods/*` via hostPath, discovers pods via the K8s API for labels (namespace, pod, container, app, node), strips the CRI envelope with `stage.cri{}`, ships to Loki's gateway. Values in `core/alloy/values.yaml`. |
+| **Kiali**                  | UI      | service mesh topology + dep graph; reads metrics from the same Prometheus. Auth set to `anonymous` for homelab — change before any shared env. |
 
 What's disabled and why (in `core/monitoring/values.yaml`):
 
 - `kubeEtcd`, `kubeProxy`, `kubeControllerManager`, `kubeScheduler` — kind doesn't expose the metrics endpoints for these on the host network the way the chart expects. Leaving them on just produces DOWN targets and noisy alerts.
-- `tracing.enabled: false` in Kiali — no Tempo / Jaeger installed yet.
+- `tracing.enabled: false` in Kiali — Tempo lands in Phase 2 (see [`OBSERVABILITY_STRATEGY.md`](./OBSERVABILITY_STRATEGY.md#phase-2--traces-tempo)).
 
-### Access (until per-service routing is added)
+### Access
+
+Once the Cloudflare-side ingress + Access policy are in place:
+
+- **Grafana**: https://grafana.auraenterprise.solutions — metrics dashboards AND logs (Explore tab → Loki datasource, e.g. `{namespace="apps-dev"}` or `{app="report-ms"}`)
+- **Kiali**: https://kiali.auraenterprise.solutions — mesh topology
+
+Until then (or for local debugging):
 
 ```bash
 # Grafana
@@ -514,7 +569,7 @@ kubectl -n kiali port-forward svc/kiali 20001:20001
 # http://localhost:20001
 ```
 
-Adding `grafana.auraenterprise.solutions` and `kiali.auraenterprise.solutions` `VirtualService`s (gated behind Cloudflare Access) is a follow-up — see Backlog.
+Loki has no dedicated UI — all log queries go through Grafana's Explore tab using the registered Loki datasource. There is no need to expose Loki itself publicly; only Grafana needs a hostname.
 
 ## Managing secrets
 
@@ -964,7 +1019,8 @@ kubectl -n <ns> annotate vaultstaticsecret <name> \
 - [ ] **Dynamic Vault secrets (Postgres + AWS STS)** — Vault's headline feature. Use the `database` engine to issue short-lived PG credentials per app, and the `aws` engine to mint STS tokens for the ECR rotator (replacing the static AWS access key). Far enough out that we don't need to plan it now.
 - [x] ~~**Secrets management strategy**~~ — chose Vault over SOPS+age for the long-term path. See [Managing secrets](#managing-secrets). Vault server lands at sync-wave 5; VSO + per-app migration are follow-up commits.
 - [x] ~~**Public ingress TLS**~~ — Cloudflare provides Universal SSL at the edge for all first-level subdomains of `auraenterprise.solutions`. cert-manager is not needed unless we move to in-cluster TLS later (e.g. for in-mesh STRICT mTLS — separate concern).
-- [ ] **Istio routing + Cloudflare Access for Grafana + Kiali** — `grafana.auraenterprise.solutions` / `kiali.auraenterprise.solutions` VirtualServices attaching to the shared `public-gateway`, with Cloudflare Access SSO policies gating each. Same pattern as the ArgoCD/Vault rollout plan.
+- [x] ~~**Istio routing for Grafana + Kiali**~~ — VirtualServices landed at `core/monitoring/routing/` and `core/kiali/routing/`, wired via `bootstrap/apps/{grafana,kiali}-routing.yaml`. Still TODO: Cloudflare-side public-hostname ingress rules + Access SSO policies (manual, Cloudflare dashboard).
+- [ ] **Cloudflare Access SSO policies for admin UIs** — add ingress rules in the Cloudflare Tunnel for `argocd.*`, `grafana.*`, `kiali.*`, and gate each behind an Access application (Zero Trust → Access → Applications) with GitHub or Google SSO. The Istio VirtualServices already exist; this is the Cloudflare-side half.
 - [x] ~~**`public-gateway` refactor**~~ — landed. One Gateway in `istio-ingress` listens on `*.auraenterprise.solutions`; per-service `VirtualService` lives with the app. Adding a new public host is now a VirtualService change (+ one Cloudflare ingress rule if not using the wildcard tunnel rule).
 - [ ] **Tracing** — Tempo (or Jaeger), wired into Kiali's `external_services.tracing`.
 - [x] ~~**Source Hydrator enablement**~~ — landed with Postgres (`apps/postgres/overlays/<env>` → `environments/<env>` branches). Spec is `spec.sourceHydrator` on every app Application; see Concepts.
