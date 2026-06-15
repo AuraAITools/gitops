@@ -20,5 +20,5 @@ patches:
         path: /data/KEYCLOAK_ISSUER
         value: "https://accounts-dev.auraenterprise.solutions/realms/aura"
       - op: add
-        path: /data/NEXT_PUBLIC_REPORT_SERVICE_URL
+        path: /data/REPORT_SERVICE_URL
         value: "https://api-dev.auraenterprise.solutions"
