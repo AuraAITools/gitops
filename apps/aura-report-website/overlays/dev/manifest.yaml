@@ -8,9 +8,9 @@ apiVersion: v1
 data:
   KEYCLOAK_CLIENT_ID: aura-application-client
   KEYCLOAK_ISSUER: https://accounts-dev.auraenterprise.solutions/realms/aura
-  NEXT_PUBLIC_REPORT_SERVICE_URL: https://api-dev.auraenterprise.solutions
   NEXTAUTH_URL: https://app-dev.auraenterprise.solutions
   NODE_ENV: production
+  REPORT_SERVICE_URL: https://api-dev.auraenterprise.solutions
 kind: ConfigMap
 metadata:
   name: bff-config

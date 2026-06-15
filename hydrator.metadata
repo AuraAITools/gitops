@@ -1,7 +1,7 @@
 {
   "repoURL": "https://github.com/AuraAITools/gitops.git",
-  "drySha": "2c465e50a4395f6f56e62573952d58e995ef219d",
+  "drySha": "f18d9b7fc0ba93522c44dd43a6ea2d2b9f951e0d",
   "author": "kevin-otter-liu <kevinliusingapore@gmail.com>",
-  "date": "2026-06-07T15:11:25Z",
-  "subject": "config: database-runner spring profile"
+  "date": "2026-06-15T15:43:20Z",
+  "subject": "fix: change configmap"
 }
