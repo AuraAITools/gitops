@@ -11,13 +11,14 @@ spec:
   channel: stable
 
   config:
-    # Memory engine for dev — single replica, no datastore, lossy across pod
-    # restarts. Fine for smoke-testing the operator + report-ms integration.
-    # Switch to `postgres` (and bring back a CNPG postgres-spicedb cluster)
-    # before prod traffic; see AURA_STACK_DEPLOYMENT.md §3.4.
-    datastoreEngine: memory
+    # Postgres backend — schema + relationships survive pod restarts.
+    # Datastore lives in the CNPG cluster `postgres-spicedb` (apps/postgres-spicedb/);
+    # connection string is written to Vault `aura/dev/spicedb` as `datastore_uri`
+    # and materialized into `spicedb-secrets` by VSO. The operator runs the
+    # `spicedb datastore migrate head` Job on first reconcile.
+    datastoreEngine: postgres
     logLevel: info
 
   # Materialized by VSO from Vault path `aura/dev/spicedb`.
-  # Required keys: `preshared_key` (and `datastore_uri` if not memory).
+  # Required keys: `preshared_key` AND `datastore_uri`.
   secretName: spicedb-secrets
