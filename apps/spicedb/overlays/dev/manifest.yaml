@@ -12,7 +12,7 @@ metadata:
 spec:
   channel: stable
   config:
-    datastoreEngine: memory
+    datastoreEngine: postgres
     logLevel: info
   secretName: spicedb-secrets
 ---

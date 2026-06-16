@@ -1,6 +1,6 @@
 {
   "repoURL": "https://github.com/AuraAITools/gitops.git",
-  "drySha": "06cf32a23e6ba2dec7a94f6ffbf35e8e319ecd7e",
+  "drySha": "5b75ab65a8fd87e3354b5d946856a6fe21c38af8",
   "commands": [
     "kustomize build ./apps/spicedb/overlays/dev"
   ]
