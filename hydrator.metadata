@@ -1,7 +1,7 @@
 {
   "repoURL": "https://github.com/AuraAITools/gitops.git",
-  "drySha": "21354a6b55db0fd41d236fe0c8738b4b50c38e1d",
+  "drySha": "e9cc58d07f1ecc0fcc7776d98b9634fa7fbf1fff",
   "author": "kevin-otter-liu <kevinliusingapore@gmail.com>",
-  "date": "2026-06-17T13:32:19Z",
-  "subject": "config: add bucket name"
+  "date": "2026-06-17T13:49:53Z",
+  "subject": "config: change bucket name"
 }
