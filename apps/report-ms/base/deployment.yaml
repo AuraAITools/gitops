@@ -61,7 +61,7 @@ spec:
             - configMapRef:
                 name: report-ms-config
             # KEYCLOAK_CLIENT_SECRET, KEYCLOAK_CLIENT_UUID, SPICEDB_PRESHARED_KEY,
-            # AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, MAIL_PASSWORD — materialized
+            # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, MAIL_PASSWORD — materialized
             # by VSO from Vault path `aura/<env>/report-ms`. See README "Managing
             # secrets" for the chain (Vault → VaultStaticSecret → K8s Secret).
             - secretRef:

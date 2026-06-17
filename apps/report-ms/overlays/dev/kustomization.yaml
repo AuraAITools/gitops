@@ -15,7 +15,7 @@ patches:
     patch: |
       - op: add
         path: /data/AWS_S3_BUCKET_NAME
-        value: "aura_bucket"
+        value: "aura-ap-southeast-dev"
       - op: add
         path: /data/KEYCLOAK_CLIENT_SERVER_URL
         value: "https://accounts-dev.auraenterprise.solutions"
