@@ -1,7 +1,7 @@
 {
   "repoURL": "https://github.com/AuraAITools/gitops.git",
-  "drySha": "5b75ab65a8fd87e3354b5d946856a6fe21c38af8",
+  "drySha": "21354a6b55db0fd41d236fe0c8738b4b50c38e1d",
   "author": "kevin-otter-liu <kevinliusingapore@gmail.com>",
-  "date": "2026-06-16T14:05:23Z",
-  "subject": "feat: add persistence to spicedb"
+  "date": "2026-06-17T13:32:19Z",
+  "subject": "config: add bucket name"
 }
